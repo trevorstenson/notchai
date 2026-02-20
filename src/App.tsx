@@ -7,28 +7,27 @@ import {
 import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
-import { DetailView } from "./components/DetailView";
 import "./App.css";
 
 type ViewState = "hidden" | "collapsed" | "expanded";
 
-// Hover zone dimensions — matches lib.rs setup
-const HOVER_ZONE_WIDTH = 400;
-const HOVER_ZONE_HEIGHT = 50;
+// Hover zone — invisible mouse-capture area (matches lib.rs setup)
+const HOVER_ZONE_WIDTH = 540;
+const HOVER_ZONE_HEIGHT = 60;
 
-const EXPANDED_WIDTH = 380;
-const EXPANDED_HEIGHT = 520;
+// Active window — large enough for the expanded island
+const ACTIVE_WIDTH = 540;
+const ACTIVE_HEIGHT = 320;
 
 // Timing
-const EXPAND_DELAY_MS = 200;
-const COLLAPSE_DELAY_MS = 300;
-const HIDE_DELAY_MS = 400;
+const EXPAND_DELAY_MS = 300;
+const COLLAPSE_DELAY_MS = 200;
+const HIDE_DELAY_MS = 300;
 
 function App() {
   const { sessions, activeSessions, operatingCount, notchInfo } =
     useAgentMonitor(2000);
   const [viewState, setViewState] = useState<ViewState>("hidden");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -57,12 +56,12 @@ function App() {
     );
   }, [getCenterX]);
 
-  const resizeToExpanded = useCallback(async () => {
+  const resizeToActive = useCallback(async () => {
     const win = getCurrentWindow();
     const centerX = getCenterX();
-    await win.setSize(new LogicalSize(EXPANDED_WIDTH, EXPANDED_HEIGHT));
+    await win.setSize(new LogicalSize(ACTIVE_WIDTH, ACTIVE_HEIGHT));
     await win.setPosition(
-      new LogicalPosition(centerX - EXPANDED_WIDTH / 2, 0)
+      new LogicalPosition(centerX - ACTIVE_WIDTH / 2, 0)
     );
   }, [getCenterX]);
 
@@ -70,43 +69,41 @@ function App() {
     clearTimers();
 
     if (viewState === "hidden") {
-      setViewState("collapsed");
-      expandTimerRef.current = setTimeout(async () => {
-        // Resize window FIRST so content isn't clipped
-        await resizeToExpanded();
-        setViewState("expanded");
-      }, EXPAND_DELAY_MS);
+      // Resize window to active size, then show island
+      resizeToActive().then(() => {
+        setViewState("collapsed");
+        expandTimerRef.current = setTimeout(() => {
+          setViewState("expanded");
+        }, EXPAND_DELAY_MS);
+      });
     } else if (viewState === "collapsed") {
-      expandTimerRef.current = setTimeout(async () => {
-        await resizeToExpanded();
+      // Already active size, just schedule expand
+      expandTimerRef.current = setTimeout(() => {
         setViewState("expanded");
       }, EXPAND_DELAY_MS);
     }
     // If already expanded, timers are cleared — stay expanded
-  }, [viewState, clearTimers, resizeToExpanded]);
+  }, [viewState, clearTimers, resizeToActive]);
 
   const handleMouseLeave = useCallback(() => {
     clearTimers();
 
     if (viewState === "expanded") {
-      hideTimerRef.current = setTimeout(async () => {
-        // Remove content FIRST, then shrink window
+      hideTimerRef.current = setTimeout(() => {
         setViewState("collapsed");
-        setSelectedId(null);
-        await resizeToHoverZone();
-
         hideTimerRef.current = setTimeout(() => {
           setViewState("hidden");
+          // Shrink window back after CSS fade-out
+          setTimeout(() => resizeToHoverZone(), 150);
         }, HIDE_DELAY_MS);
       }, COLLAPSE_DELAY_MS);
     } else if (viewState === "collapsed") {
       hideTimerRef.current = setTimeout(() => {
         setViewState("hidden");
+        setTimeout(() => resizeToHoverZone(), 150);
       }, HIDE_DELAY_MS);
     }
   }, [viewState, clearTimers, resizeToHoverZone]);
-
-  const selectedSession = sessions.find((s) => s.id === selectedId) || null;
 
   return (
     <div
@@ -114,31 +111,21 @@ function App() {
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
-      {viewState !== "hidden" && (
-        <div className="notch-container">
-          <CollapsedView
-            sessions={activeSessions}
-            operatingCount={operatingCount}
-          />
-
-          {viewState === "expanded" && (
-            <div className="expanded-container">
-              <ExpandedView
-                sessions={sessions}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
+      <div className="island-wrapper">
+        <div className={`island island--${viewState}`}>
+          {viewState !== "hidden" && (
+            <>
+              <CollapsedView
+                sessions={activeSessions}
+                operatingCount={operatingCount}
               />
-
-              {selectedSession && (
-                <DetailView
-                  session={selectedSession}
-                  onClose={() => setSelectedId(null)}
-                />
+              {viewState === "expanded" && (
+                <ExpandedView sessions={sessions} />
               )}
-            </div>
+            </>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
