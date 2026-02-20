@@ -50,6 +50,25 @@ pub fn run() {
                 .set_size(tauri::LogicalSize::new(hover_width, hover_height))
                 .ok();
 
+            // Force truly transparent window on macOS.
+            // Tauri's `transparent: true` config alone can leave the
+            // NSWindow / WKWebView background as black instead of clear.
+            #[cfg(target_os = "macos")]
+            {
+                use objc::runtime::{Object, NO};
+                use objc::{class, msg_send, sel, sel_impl};
+
+                if let Ok(ns_win) = window.ns_window() {
+                    let ns_win = ns_win as *mut Object;
+                    unsafe {
+                        let clear: *mut Object = msg_send![class!(NSColor), clearColor];
+                        let _: () = msg_send![ns_win, setBackgroundColor: clear];
+                        let _: () = msg_send![ns_win, setOpaque: NO];
+                        let _: () = msg_send![ns_win, setHasShadow: NO];
+                    }
+                }
+            }
+
             // Make visible on all workspaces
             window.set_visible_on_all_workspaces(true).ok();
 
