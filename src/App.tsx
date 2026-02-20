@@ -72,13 +72,14 @@ function App() {
     if (viewState === "hidden") {
       setViewState("collapsed");
       expandTimerRef.current = setTimeout(async () => {
-        setViewState("expanded");
+        // Resize window FIRST so content isn't clipped
         await resizeToExpanded();
+        setViewState("expanded");
       }, EXPAND_DELAY_MS);
     } else if (viewState === "collapsed") {
       expandTimerRef.current = setTimeout(async () => {
-        setViewState("expanded");
         await resizeToExpanded();
+        setViewState("expanded");
       }, EXPAND_DELAY_MS);
     }
     // If already expanded, timers are cleared — stay expanded
@@ -89,6 +90,7 @@ function App() {
 
     if (viewState === "expanded") {
       hideTimerRef.current = setTimeout(async () => {
+        // Remove content FIRST, then shrink window
         setViewState("collapsed");
         setSelectedId(null);
         await resizeToHoverZone();
