@@ -38,6 +38,33 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  background: transparent;
+}
+
+/* Hidden state: invisible hover target */
+.notch-root--hidden {
+  cursor: default;
+}
+
+/* Collapsed state: pill fades in */
+.notch-root--collapsed .notch-container {
+  animation: fadeIn 0.15s ease-out forwards;
+}
+
+/* Expanded state: fully visible */
+.notch-root--expanded .notch-container {
+  opacity: 1;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .notch-container {

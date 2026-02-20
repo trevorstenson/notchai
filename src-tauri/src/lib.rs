@@ -35,17 +35,19 @@ pub fn run() {
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
 
-            // Detect notch and position window
+            // Detect notch and position an invisible hover zone over it.
+            // The zone is larger than the notch so the mouse can be
+            // detected approaching from the sides or below.
             let notch = notch::detect_notch();
-            let collapsed_width = (notch.width + 100.0).max(280.0);
-            let collapsed_height = 40.0;
-            let x = notch.center_x() - collapsed_width / 2.0;
+            let hover_width = (notch.width + 200.0).max(400.0);
+            let hover_height = 50.0;
+            let x = notch.center_x() - hover_width / 2.0;
 
             window
                 .set_position(tauri::LogicalPosition::new(x, 0.0))
                 .ok();
             window
-                .set_size(tauri::LogicalSize::new(collapsed_width, collapsed_height))
+                .set_size(tauri::LogicalSize::new(hover_width, hover_height))
                 .ok();
 
             // Make visible on all workspaces
