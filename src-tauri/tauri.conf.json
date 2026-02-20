@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Notchai",
-        "width": 300,
-        "height": 40,
+        "width": 400,
+        "height": 50,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -26,6 +26,7 @@
         "shadow": false
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

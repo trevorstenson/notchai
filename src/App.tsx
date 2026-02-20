@@ -1,80 +1,142 @@
-import { useState, useCallback } from "react";
-import { getCurrentWindow, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
+import { useState, useCallback, useRef } from "react";
+import {
+  getCurrentWindow,
+  LogicalSize,
+  LogicalPosition,
+} from "@tauri-apps/api/window";
 import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
 import { DetailView } from "./components/DetailView";
 import "./App.css";
 
-const COLLAPSED_WIDTH = 280;
-const COLLAPSED_HEIGHT = 40;
+type ViewState = "hidden" | "collapsed" | "expanded";
+
+// Hover zone dimensions — matches lib.rs setup
+const HOVER_ZONE_WIDTH = 400;
+const HOVER_ZONE_HEIGHT = 50;
+
 const EXPANDED_WIDTH = 380;
 const EXPANDED_HEIGHT = 520;
+
+// Timing
+const EXPAND_DELAY_MS = 200;
+const COLLAPSE_DELAY_MS = 300;
+const HIDE_DELAY_MS = 400;
 
 function App() {
   const { sessions, activeSessions, operatingCount, notchInfo } =
     useAgentMonitor(2000);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [viewState, setViewState] = useState<ViewState>("hidden");
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const expand = useCallback(async () => {
-    if (isExpanded) return;
-    setIsExpanded(true);
+  const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearTimers = useCallback(() => {
+    if (expandTimerRef.current) {
+      clearTimeout(expandTimerRef.current);
+      expandTimerRef.current = null;
+    }
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+
+  const getCenterX = useCallback(() => {
+    return notchInfo ? notchInfo.x + notchInfo.width / 2 : 756;
+  }, [notchInfo]);
+
+  const resizeToHoverZone = useCallback(async () => {
     const win = getCurrentWindow();
-    const centerX = notchInfo
-      ? notchInfo.x + notchInfo.width / 2
-      : 756;
+    const centerX = getCenterX();
+    await win.setSize(new LogicalSize(HOVER_ZONE_WIDTH, HOVER_ZONE_HEIGHT));
+    await win.setPosition(
+      new LogicalPosition(centerX - HOVER_ZONE_WIDTH / 2, 0)
+    );
+  }, [getCenterX]);
+
+  const resizeToExpanded = useCallback(async () => {
+    const win = getCurrentWindow();
+    const centerX = getCenterX();
     await win.setSize(new LogicalSize(EXPANDED_WIDTH, EXPANDED_HEIGHT));
     await win.setPosition(
       new LogicalPosition(centerX - EXPANDED_WIDTH / 2, 0)
     );
-  }, [isExpanded, notchInfo]);
+  }, [getCenterX]);
 
-  const collapse = useCallback(async () => {
-    if (!isExpanded) return;
-    setIsExpanded(false);
-    setSelectedId(null);
-    const win = getCurrentWindow();
-    const centerX = notchInfo
-      ? notchInfo.x + notchInfo.width / 2
-      : 756;
-    await win.setSize(new LogicalSize(COLLAPSED_WIDTH, COLLAPSED_HEIGHT));
-    await win.setPosition(
-      new LogicalPosition(centerX - COLLAPSED_WIDTH / 2, 0)
-    );
-  }, [isExpanded, notchInfo]);
+  const handleMouseEnter = useCallback(() => {
+    clearTimers();
+
+    if (viewState === "hidden") {
+      setViewState("collapsed");
+      expandTimerRef.current = setTimeout(async () => {
+        setViewState("expanded");
+        await resizeToExpanded();
+      }, EXPAND_DELAY_MS);
+    } else if (viewState === "collapsed") {
+      expandTimerRef.current = setTimeout(async () => {
+        setViewState("expanded");
+        await resizeToExpanded();
+      }, EXPAND_DELAY_MS);
+    }
+    // If already expanded, timers are cleared — stay expanded
+  }, [viewState, clearTimers, resizeToExpanded]);
+
+  const handleMouseLeave = useCallback(() => {
+    clearTimers();
+
+    if (viewState === "expanded") {
+      hideTimerRef.current = setTimeout(async () => {
+        setViewState("collapsed");
+        setSelectedId(null);
+        await resizeToHoverZone();
+
+        hideTimerRef.current = setTimeout(() => {
+          setViewState("hidden");
+        }, HIDE_DELAY_MS);
+      }, COLLAPSE_DELAY_MS);
+    } else if (viewState === "collapsed") {
+      hideTimerRef.current = setTimeout(() => {
+        setViewState("hidden");
+      }, HIDE_DELAY_MS);
+    }
+  }, [viewState, clearTimers, resizeToHoverZone]);
 
   const selectedSession = sessions.find((s) => s.id === selectedId) || null;
 
   return (
     <div
-      className="notch-root"
-      onMouseEnter={expand}
-      onMouseLeave={collapse}
+      className={`notch-root notch-root--${viewState}`}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
-      <div className="notch-container">
-        <CollapsedView
-          sessions={activeSessions}
-          operatingCount={operatingCount}
-        />
+      {viewState !== "hidden" && (
+        <div className="notch-container">
+          <CollapsedView
+            sessions={activeSessions}
+            operatingCount={operatingCount}
+          />
 
-        {isExpanded && (
-          <div className="expanded-container">
-            <ExpandedView
-              sessions={sessions}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-
-            {selectedSession && (
-              <DetailView
-                session={selectedSession}
-                onClose={() => setSelectedId(null)}
+          {viewState === "expanded" && (
+            <div className="expanded-container">
+              <ExpandedView
+                sessions={sessions}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
               />
-            )}
-          </div>
-        )}
-      </div>
+
+              {selectedSession && (
+                <DetailView
+                  session={selectedSession}
+                  onClose={() => setSelectedId(null)}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
