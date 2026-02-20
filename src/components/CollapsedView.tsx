@@ -21,7 +21,7 @@ export function CollapsedView({ sessions, operatingCount }: CollapsedViewProps) 
           <span className="collapsed-count">{operatingCount}</span>
         )}
         {activeSessions.length === 0 && (
-          <span className="collapsed-empty">lome</span>
+          <span className="collapsed-empty">notchai</span>
         )}
       </div>
     </div>

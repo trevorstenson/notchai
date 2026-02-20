@@ -1,12 +1,12 @@
 [package]
-name = "lome"
+name = "notchai"
 version = "0.1.0"
 description = "Notch-based agent monitor for macOS"
 authors = ["Trevor Stenson"]
 edition = "2021"
 
 [lib]
-name = "lome_lib"
+name = "notchai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
