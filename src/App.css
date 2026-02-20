@@ -38,7 +38,9 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: transparent;
+  /* Near-zero opacity so macOS still delivers mouse events
+     to this area. Fully transparent regions are pass-through. */
+  background: rgba(0, 0, 0, 0.005);
 }
 
 /* Hidden state: invisible hover target */
