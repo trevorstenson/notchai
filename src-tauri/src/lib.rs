@@ -39,8 +39,8 @@ pub fn run() {
             // The zone is larger than the notch so the mouse can be
             // detected approaching from the sides or below.
             let notch = notch::detect_notch();
-            let hover_width = (notch.width + 200.0).max(400.0);
-            let hover_height = 50.0;
+            let hover_width = (notch.width + 340.0).max(540.0);
+            let hover_height = 60.0;
             let x = notch.center_x() - hover_width / 2.0;
 
             window

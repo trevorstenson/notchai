@@ -10,20 +10,19 @@ export function CollapsedView({ sessions, operatingCount }: CollapsedViewProps) 
   const activeSessions = sessions.filter((s) => s.status !== "completed");
 
   return (
-    <div className="collapsed-view">
-      <div className="collapsed-pill">
-        <div className="collapsed-dots">
-          {activeSessions.slice(0, 5).map((session) => (
-            <StatusDot key={session.id} status={session.status} size={6} />
-          ))}
-        </div>
-        {operatingCount > 0 && (
-          <span className="collapsed-count">{operatingCount}</span>
-        )}
-        {activeSessions.length === 0 && (
-          <span className="collapsed-empty">notchai</span>
-        )}
+    <div className="collapsed-content">
+      <div className="collapsed-dots">
+        {activeSessions.slice(0, 5).map((session) => (
+          <StatusDot key={session.id} status={session.status} size={7} />
+        ))}
       </div>
+      {operatingCount > 0 ? (
+        <span className="collapsed-count">{operatingCount} active</span>
+      ) : activeSessions.length > 0 ? (
+        <span className="collapsed-count">{activeSessions.length} idle</span>
+      ) : (
+        <span className="collapsed-empty">notchai</span>
+      )}
     </div>
   );
 }
