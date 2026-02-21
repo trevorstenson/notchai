@@ -35,6 +35,10 @@ impl SessionIndexScanner {
         for entry in dir.flatten() {
             if entry.file_type().map_or(false, |ft| ft.is_dir()) {
                 let project_dir = entry.path();
+                let decoded_project_path = project_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(Self::decode_project_slug);
                 let index_path = project_dir.join("sessions-index.json");
                 if index_path.exists() {
                     if let Ok(content) = fs::read_to_string(&index_path) {
@@ -84,7 +88,7 @@ impl SessionIndexScanner {
                             created: modified.clone(),
                             modified,
                             git_branch: None,
-                            project_path: None,
+                            project_path: decoded_project_path.clone(),
                             is_sidechain: None,
                         });
                         seen_session_ids.insert(session_id);
@@ -107,5 +111,13 @@ impl SessionIndexScanner {
         );
 
         entries
+    }
+
+    fn decode_project_slug(slug: &str) -> Option<String> {
+        if !slug.starts_with('-') || slug.len() <= 1 {
+            return None;
+        }
+        let trimmed = &slug[1..];
+        Some(format!("/{}", trimmed.replace('-', "/")))
     }
 }

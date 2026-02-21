@@ -7,12 +7,23 @@ use crate::models::TranscriptEntry;
 
 pub struct TranscriptReader {
     offsets: HashMap<String, u64>,
+    telemetry: HashMap<String, SessionTelemetry>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionTelemetry {
+    pub total_input: u64,
+    pub total_output: u64,
+    pub last_message_type: Option<String>,
+    pub model: Option<String>,
+    pub cwd: Option<String>,
 }
 
 impl TranscriptReader {
     pub fn new() -> Self {
         Self {
             offsets: HashMap::new(),
+            telemetry: HashMap::new(),
         }
     }
 
@@ -76,7 +87,51 @@ impl TranscriptReader {
         }
 
         self.offsets.insert(session_id.to_string(), file_size);
+        self.update_telemetry(session_id, &entries);
         entries
+    }
+
+    fn update_telemetry(&mut self, session_id: &str, entries: &[TranscriptEntry]) {
+        if entries.is_empty() {
+            return;
+        }
+
+        let state = self
+            .telemetry
+            .entry(session_id.to_string())
+            .or_default();
+
+        for entry in entries {
+            if let Some(cwd) = entry.cwd.clone() {
+                state.cwd = Some(cwd);
+            }
+
+            if let Some(ref msg) = entry.message {
+                if let Some(ref usage) = msg.usage {
+                    state.total_input += usage.input_tokens.unwrap_or(0);
+                    state.total_input += usage.cache_creation_input_tokens.unwrap_or(0);
+                    state.total_input += usage.cache_read_input_tokens.unwrap_or(0);
+                    state.total_output += usage.output_tokens.unwrap_or(0);
+                }
+                if let Some(model) = msg.model.clone() {
+                    state.model = Some(model);
+                }
+            }
+
+            if matches!(
+                entry.entry_type.as_deref(),
+                Some("user") | Some("assistant")
+            ) {
+                state.last_message_type = entry.entry_type.clone();
+            }
+        }
+    }
+
+    pub fn get_telemetry(&self, session_id: &str) -> SessionTelemetry {
+        self.telemetry
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn get_token_totals(entries: &[TranscriptEntry]) -> (u64, u64) {

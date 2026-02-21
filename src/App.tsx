@@ -19,17 +19,26 @@ const HOVER_ZONE_HEIGHT = 60;
 // Active window — large enough for the expanded island
 const ACTIVE_WIDTH = 540;
 const ACTIVE_HEIGHT = 320;
-const LEAVE_COLLAPSE_DELAY_MS = 180;
-const DEBUG_FIXED_WINDOW = true;
+const ENTER_EXPAND_DELAY_MS = 90;
+const LEAVE_COLLAPSE_DELAY_MS = 220;
+const OPEN_PANEL_EXPAND_DELAY_MS = 40;
+
+// Debug behavior is enabled during development only.
+const DEBUG_MODE = import.meta.env.DEV;
+const DEBUG_FIXED_WINDOW = DEBUG_MODE;
 
 function App() {
-  const { sessions, operatingCount, notchInfo, error } =
-    useAgentMonitor(2000);
+  const { sessions, operatingCount, notchInfo } =
+    useAgentMonitor(1000);
   const [viewState, setViewState] = useState<ViewState>("collapsed");
-  const [hoverEnterCount, setHoverEnterCount] = useState(0);
-  const [hoverLeaveCount, setHoverLeaveCount] = useState(0);
-  const [lastHoverEvent, setLastHoverEvent] = useState("none");
+  const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const debugLog = useCallback((message: string, payload?: unknown) => {
+    if (DEBUG_MODE) {
+      console.log(message, payload);
+    }
+  }, []);
 
   const getCenterX = useCallback(() => {
     return notchInfo ? notchInfo.x + notchInfo.width / 2 : 756;
@@ -38,34 +47,37 @@ function App() {
   const resizeToHoverZone = useCallback(async () => {
     const win = getCurrentWindow();
     const centerX = getCenterX();
-    console.log("[notchai-ui] resizeToHoverZone", { centerX });
+    debugLog("[notchai-ui] resizeToHoverZone", { centerX });
     const height = DEBUG_FIXED_WINDOW ? ACTIVE_HEIGHT : HOVER_ZONE_HEIGHT;
     await win.setSize(new LogicalSize(HOVER_ZONE_WIDTH, height));
     await win.setPosition(
       new LogicalPosition(centerX - HOVER_ZONE_WIDTH / 2, 0)
     );
-  }, [getCenterX]);
+  }, [debugLog, getCenterX]);
 
   const resizeToActive = useCallback(async () => {
     const win = getCurrentWindow();
     const centerX = getCenterX();
-    console.log("[notchai-ui] resizeToActive", { centerX });
+    debugLog("[notchai-ui] resizeToActive", { centerX });
     await win.setSize(new LogicalSize(ACTIVE_WIDTH, ACTIVE_HEIGHT));
     await win.setPosition(
       new LogicalPosition(centerX - ACTIVE_WIDTH / 2, 0)
     );
-  }, [getCenterX]);
+  }, [debugLog, getCenterX]);
 
-  const handleIslandMouseEnter = useCallback(() => {
+  const clearInteractionTimers = useCallback(() => {
+    if (enterTimerRef.current) {
+      clearTimeout(enterTimerRef.current);
+      enterTimerRef.current = null;
+    }
     if (leaveTimerRef.current) {
       clearTimeout(leaveTimerRef.current);
       leaveTimerRef.current = null;
     }
-    setHoverEnterCount((c) => c + 1);
-    setLastHoverEvent(`enter@${new Date().toLocaleTimeString()}`);
-    console.log("[notchai-ui] mouseenter", { viewState });
+  }, []);
+
+  const expandPanel = useCallback(() => {
     if (viewState === "expanded") return;
-    // Flip UI state immediately so expansion is visible even if window resize is slow.
     setViewState("expanded");
     if (!DEBUG_FIXED_WINDOW) {
       resizeToActive().catch((err) =>
@@ -74,20 +86,33 @@ function App() {
     }
   }, [resizeToActive, viewState]);
 
-  const handleIslandMouseLeave = useCallback(() => {
-    setHoverLeaveCount((c) => c + 1);
-    setLastHoverEvent(`leave@${new Date().toLocaleTimeString()}`);
-    console.log("[notchai-ui] mouseleave", { viewState });
+  const collapsePanel = useCallback(() => {
     if (viewState === "collapsed") return;
-    leaveTimerRef.current = setTimeout(() => {
-      setViewState("collapsed");
-      if (!DEBUG_FIXED_WINDOW) {
-        resizeToHoverZone().catch((err) =>
-          console.error("[notchai-ui] collapse failed", err)
-        );
-      }
-    }, LEAVE_COLLAPSE_DELAY_MS);
+    setViewState("collapsed");
+    if (!DEBUG_FIXED_WINDOW) {
+      resizeToHoverZone().catch((err) =>
+        console.error("[notchai-ui] collapse failed", err)
+      );
+    }
   }, [resizeToHoverZone, viewState]);
+
+  const handleIslandMouseEnter = useCallback(() => {
+    clearInteractionTimers();
+    debugLog("[notchai-ui] mouseenter", { viewState });
+    enterTimerRef.current = setTimeout(() => {
+      expandPanel();
+      enterTimerRef.current = null;
+    }, ENTER_EXPAND_DELAY_MS);
+  }, [clearInteractionTimers, debugLog, expandPanel, viewState]);
+
+  const handleIslandMouseLeave = useCallback(() => {
+    clearInteractionTimers();
+    debugLog("[notchai-ui] mouseleave", { viewState });
+    leaveTimerRef.current = setTimeout(() => {
+      collapsePanel();
+      leaveTimerRef.current = null;
+    }, LEAVE_COLLAPSE_DELAY_MS);
+  }, [clearInteractionTimers, collapsePanel, debugLog, viewState]);
 
   // Debug mode: always keep notch zone visible (no hover requirement).
   useEffect(() => {
@@ -104,35 +129,31 @@ function App() {
   }, [resizeToActive, resizeToHoverZone]);
 
   useEffect(() => {
-    const unlisten = listen("open-panel", () => {
-      setViewState("expanded");
-      if (!DEBUG_FIXED_WINDOW) {
-        resizeToActive().catch((err) =>
-          console.error("[notchai-ui] open-panel resize failed", err)
-        );
-      }
+    const unlistenOpen = listen("open-panel", () => {
+      clearInteractionTimers();
+      enterTimerRef.current = setTimeout(() => {
+        expandPanel();
+        enterTimerRef.current = null;
+      }, OPEN_PANEL_EXPAND_DELAY_MS);
+    });
+    const unlistenClose = listen("close-panel", () => {
+      clearInteractionTimers();
+      collapsePanel();
     });
     return () => {
-      if (leaveTimerRef.current) {
-        clearTimeout(leaveTimerRef.current);
-      }
-      unlisten.then((fn) => fn());
+      clearInteractionTimers();
+      unlistenOpen.then((fn) => fn());
+      unlistenClose.then((fn) => fn());
     };
-  }, [resizeToActive]);
+  }, [clearInteractionTimers, collapsePanel, expandPanel]);
 
   const handleSessionOpened = useCallback(() => {
-    setViewState("collapsed");
-    if (!DEBUG_FIXED_WINDOW) {
-      resizeToHoverZone().catch((err) =>
-        console.error("[notchai-ui] collapse after open failed", err)
-      );
-    }
-  }, [resizeToHoverZone]);
+    clearInteractionTimers();
+    collapsePanel();
+  }, [clearInteractionTimers, collapsePanel]);
 
   return (
-    <div
-      className={`notch-root notch-root--${viewState} notch-root--debug`}
-    >
+    <div className={`notch-root notch-root--${viewState}`}>
       <div className="island-wrapper">
         <div
           className={`island island--${viewState}`}
@@ -144,7 +165,6 @@ function App() {
               <CollapsedView
                 sessions={sessions}
                 operatingCount={operatingCount}
-                debugLabel={`s:${sessions.length} op:${operatingCount} h:${hoverEnterCount}/${hoverLeaveCount} ${viewState} ${lastHoverEvent}${error ? " err" : ""}`}
               />
               {viewState === "expanded" && (
                 <ExpandedView

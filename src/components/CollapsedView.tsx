@@ -4,11 +4,11 @@ import type { AgentSession } from "../types";
 interface CollapsedViewProps {
   sessions: AgentSession[];
   operatingCount: number;
-  debugLabel?: string;
 }
 
-export function CollapsedView({ sessions, operatingCount, debugLabel }: CollapsedViewProps) {
+export function CollapsedView({ sessions, operatingCount }: CollapsedViewProps) {
   const activeSessions = sessions.filter((s) => s.status !== "completed");
+  const waitingCount = sessions.filter((s) => s.status === "waitingForInput").length;
   const visibleSessions = activeSessions.length > 0 ? activeSessions : sessions;
 
   return (
@@ -18,7 +18,11 @@ export function CollapsedView({ sessions, operatingCount, debugLabel }: Collapse
           <StatusDot key={session.id} status={session.status} size={7} />
         ))}
       </div>
-      {operatingCount > 0 ? (
+      {waitingCount > 0 ? (
+        <span className="collapsed-count collapsed-count--waiting">
+          {waitingCount} needs action
+        </span>
+      ) : operatingCount > 0 ? (
         <span className="collapsed-count">{operatingCount} active</span>
       ) : activeSessions.length > 0 ? (
         <span className="collapsed-count">{activeSessions.length} idle</span>
@@ -27,7 +31,6 @@ export function CollapsedView({ sessions, operatingCount, debugLabel }: Collapse
       ) : (
         <span className="collapsed-empty">notchai</span>
       )}
-      {debugLabel && <span className="collapsed-debug">{debugLabel}</span>}
     </div>
   );
 }

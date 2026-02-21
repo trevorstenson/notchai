@@ -51,16 +51,12 @@ impl AgentMonitor {
         let mut sessions: Vec<AgentSession> = entries
             .iter()
             .map(|entry| {
-                let transcript_entries = reader.read_recent_entries(
+                reader.read_recent_entries(
                     &entry.session_id,
                     &entry.full_path,
                     50_000,
                 );
-
-                let (total_input, total_output) =
-                    TranscriptReader::get_token_totals(&transcript_entries);
-                let last_msg_type = TranscriptReader::get_last_message_type(&transcript_entries);
-                let model = TranscriptReader::get_model(&transcript_entries);
+                let telemetry = reader.get_telemetry(&entry.session_id);
 
                 let jsonl_age = self.process_detector.get_jsonl_age_secs(&entry.full_path);
                 let is_file_active = self.process_detector.is_session_active(&entry.full_path);
@@ -73,17 +69,26 @@ impl AgentMonitor {
                     has_claude_running,
                     is_effectively_active,
                     jsonl_age,
-                    last_msg_type.as_deref(),
+                    telemetry.last_message_type.as_deref(),
                 );
 
                 let indexed_project_path = entry.project_path.clone().unwrap_or_default();
+                let telemetry_cwd = telemetry.cwd.clone().unwrap_or_default();
+                let slug_decoded_path = Self::decode_project_slug_from_full_path(&entry.full_path)
+                    .unwrap_or_default();
+                let jsonl_parent_path = Path::new(&entry.full_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
                 let session_folder_path = if !indexed_project_path.is_empty() {
                     indexed_project_path.clone()
+                } else if !telemetry_cwd.is_empty() {
+                    telemetry_cwd.clone()
+                } else if !slug_decoded_path.is_empty() {
+                    slug_decoded_path
                 } else {
-                    Path::new(&entry.full_path)
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default()
+                    jsonl_parent_path
                 };
 
                 let session_folder_name = if !session_folder_path.is_empty() {
@@ -125,10 +130,10 @@ impl AgentMonitor {
                     modified: entry.modified.clone().unwrap_or_default(),
                     status,
                     message_count: entry.message_count.unwrap_or(0),
-                    total_input_tokens: total_input,
-                    total_output_tokens: total_output,
+                    total_input_tokens: telemetry.total_input,
+                    total_output_tokens: telemetry.total_output,
                     current_task: None,
-                    model,
+                    model: telemetry.model,
                     is_sidechain: entry.is_sidechain.unwrap_or(false),
                 }
             })
@@ -162,22 +167,22 @@ impl AgentMonitor {
         jsonl_age: Option<u64>,
         last_msg_type: Option<&str>,
     ) -> AgentStatus {
+        const OPERATING_WINDOW_SECS: u64 = 6;
+        const IDLE_WINDOW_SECS: u64 = 20;
+
         if !has_claude_running || !is_file_active {
             return AgentStatus::Completed;
         }
 
         let age = jsonl_age.unwrap_or(u64::MAX);
 
-        if age < 10 {
+        if age < OPERATING_WINDOW_SECS {
             return AgentStatus::Operating;
-        }
-
-        if age < 30 {
-            return AgentStatus::Idle;
         }
 
         match last_msg_type {
             Some("assistant") => AgentStatus::WaitingForInput,
+            _ if age < IDLE_WINDOW_SECS => AgentStatus::Idle,
             _ => AgentStatus::Idle,
         }
     }
@@ -195,5 +200,20 @@ impl AgentMonitor {
         } else {
             false
         }
+    }
+
+    fn decode_project_slug_from_full_path(full_path: &str) -> Option<String> {
+        let parent = Path::new(full_path).parent()?;
+        let slug = parent.file_name()?.to_str()?;
+        Self::decode_project_slug(slug)
+    }
+
+    fn decode_project_slug(slug: &str) -> Option<String> {
+        if !slug.starts_with('-') || slug.len() <= 1 {
+            return None;
+        }
+        let trimmed = &slug[1..];
+        let decoded = format!("/{}", trimmed.replace('-', "/"));
+        Some(decoded)
     }
 }

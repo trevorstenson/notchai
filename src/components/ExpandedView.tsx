@@ -10,6 +10,8 @@ interface ExpandedViewProps {
 }
 
 const RECENT_COMPLETED_WINDOW_MS = 60 * 60 * 1000;
+const ROW_FEEDBACK_DURATION_MS = 900;
+const DEBUG_MODE = import.meta.env.DEV;
 
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -48,6 +50,10 @@ function statusRank(status: AgentSession["status"]): number {
 
 export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
   const [showAllDebug, setShowAllDebug] = useState(false);
+  const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
+  const [feedbackBySession, setFeedbackBySession] = useState<
+    Record<string, "opened" | "error">
+  >({});
 
   const filteredSessions = useMemo(() => {
     const now = Date.now();
@@ -64,7 +70,7 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
       return now - modifiedMs <= RECENT_COMPLETED_WINDOW_MS;
     });
 
-    const list = showAllDebug ? sessions : meaningful;
+    const list = DEBUG_MODE && showAllDebug ? sessions : meaningful;
 
     return [...list].sort((a, b) => {
       const rankDiff = statusRank(a.status) - statusRank(b.status);
@@ -78,11 +84,32 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
   const openSessionTerminal = async (session: AgentSession) => {
     const targetPath = session.sessionFolderPath || session.projectPath;
     if (!targetPath) return;
+    setOpeningSessionId(session.id);
     try {
-      await invoke("open_session_location", { path: targetPath });
-      onSessionOpened?.();
+      if (session.status === "completed") {
+        await invoke("resume_session", {
+          sessionId: session.id,
+          path: targetPath,
+        });
+      } else {
+        await invoke("open_session_location", { path: targetPath });
+      }
+      setFeedbackBySession((prev) => ({ ...prev, [session.id]: "opened" }));
+      setTimeout(() => {
+        onSessionOpened?.();
+      }, 120);
     } catch (err) {
       console.error("[notchai-ui] open_session_location failed", err);
+      setFeedbackBySession((prev) => ({ ...prev, [session.id]: "error" }));
+    } finally {
+      setOpeningSessionId((current) => (current === session.id ? null : current));
+      setTimeout(() => {
+        setFeedbackBySession((prev) => {
+          const next = { ...prev };
+          delete next[session.id];
+          return next;
+        });
+      }, ROW_FEEDBACK_DURATION_MS);
     }
   };
 
@@ -91,12 +118,14 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
       <div className="expanded-content">
         <div className="expanded-controls">
           <span className="expanded-title">Sessions</span>
-          <button
-            className="expanded-debug-toggle"
-            onClick={() => setShowAllDebug((v) => !v)}
-          >
-            {showAllDebug ? "Hide debug" : "Show all (debug)"}
-          </button>
+          {DEBUG_MODE && (
+            <button
+              className="expanded-debug-toggle"
+              onClick={() => setShowAllDebug((v) => !v)}
+            >
+              {showAllDebug ? "Hide debug" : "Show all (debug)"}
+            </button>
+          )}
         </div>
         <div className="expanded-empty">No visible sessions</div>
       </div>
@@ -110,12 +139,14 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
           Sessions
           {!showAllDebug && hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""}
         </span>
-        <button
-          className="expanded-debug-toggle"
-          onClick={() => setShowAllDebug((v) => !v)}
-        >
-          {showAllDebug ? "Hide debug" : "Show all (debug)"}
-        </button>
+        {DEBUG_MODE && (
+          <button
+            className="expanded-debug-toggle"
+            onClick={() => setShowAllDebug((v) => !v)}
+          >
+            {showAllDebug ? "Hide debug" : "Show all (debug)"}
+          </button>
+        )}
       </div>
       <div className="expanded-divider" />
       <div className="expanded-sessions">
@@ -127,6 +158,11 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
           const folderLabel =
             session.sessionFolderName || session.projectPath || "unknown";
 
+          const rowFeedback =
+            openingSessionId === session.id
+              ? "opening"
+              : feedbackBySession[session.id] ?? null;
+
           return (
             <div
               key={session.id}
@@ -134,7 +170,7 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
                 session.sessionFolderPath || session.projectPath
                   ? "session-row--clickable"
                   : ""
-              }`}
+              } ${session.status === "waitingForInput" ? "session-row--waiting" : ""}`}
               onClick={() => openSessionTerminal(session)}
               title={
                 session.sessionFolderPath || session.projectPath
@@ -150,6 +186,15 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
                 <span className="session-status">
                   {STATUS_LABELS[session.status]}
                 </span>
+                {rowFeedback && (
+                  <span className={`session-action-feedback session-action-feedback--${rowFeedback}`}>
+                    {rowFeedback === "opening"
+                      ? "Opening…"
+                      : rowFeedback === "opened"
+                        ? "Opened"
+                        : "Failed"}
+                  </span>
+                )}
                 <span className="session-time">{timeAgo(session.modified)}</span>
               </div>
 

@@ -46,7 +46,7 @@ export const STATUS_COLORS: Record<AgentStatus, string> = {
 export const STATUS_LABELS: Record<AgentStatus, string> = {
   operating: "Operating",
   idle: "Idle",
-  waitingForInput: "Waiting",
+  waitingForInput: "Needs action",
   error: "Error",
   completed: "Done",
 };

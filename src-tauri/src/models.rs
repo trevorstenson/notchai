@@ -94,6 +94,7 @@ pub struct SessionIndexEntry {
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
     pub entry_type: Option<String>,
+    pub cwd: Option<String>,
     #[serde(rename = "sessionId")]
     #[allow(dead_code)]
     pub session_id: Option<String>,
