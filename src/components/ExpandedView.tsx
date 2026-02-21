@@ -84,6 +84,7 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
   const openSessionTerminal = async (session: AgentSession) => {
     const targetPath = session.sessionFolderPath || session.projectPath;
     if (!targetPath) return;
+    if (openingSessionId === session.id) return;
     setOpeningSessionId(session.id);
     try {
       if (session.status === "completed") {
