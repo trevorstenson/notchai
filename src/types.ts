@@ -9,6 +9,8 @@ export interface AgentSession {
   id: string;
   projectPath: string;
   projectName: string;
+  sessionFolderPath: string;
+  sessionFolderName: string;
   gitBranch: string;
   firstPrompt: string;
   summary: string | null;

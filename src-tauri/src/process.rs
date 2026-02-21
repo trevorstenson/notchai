@@ -40,7 +40,7 @@ impl ProcessDetector {
 
     pub fn is_session_active(&self, jsonl_path: &str) -> bool {
         self.get_jsonl_age_secs(jsonl_path)
-            .map_or(false, |age| age < 60)
+            .map_or(false, |age| age < 900)
     }
 
     pub fn get_jsonl_age_secs(&self, jsonl_path: &str) -> Option<u64> {

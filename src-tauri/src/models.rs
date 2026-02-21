@@ -18,6 +18,8 @@ pub struct AgentSession {
     pub id: String,
     pub project_path: String,
     pub project_name: String,
+    pub session_folder_path: String,
+    pub session_folder_name: String,
     pub git_branch: String,
     pub first_prompt: String,
     pub summary: Option<String>,

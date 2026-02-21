@@ -56,6 +56,13 @@ body {
   background: rgba(0, 0, 0, 0.005);
 }
 
+.notch-root--debug {
+  /* Temporary: make the notch capture zone visible for layout debugging */
+  background: rgba(80, 160, 255, 0.14);
+  outline: 2px dashed rgba(80, 160, 255, 0.8);
+  outline-offset: -2px;
+}
+
 .notch-root--hidden {
   cursor: default;
 }
@@ -149,6 +156,12 @@ body {
   letter-spacing: 0.5px;
 }
 
+.collapsed-debug {
+  font-size: 10px;
+  color: #8db6ff;
+  opacity: 0.9;
+}
+
 /* === Status Dot === */
 .status-dot {
   display: inline-block;
@@ -178,6 +191,32 @@ body {
   width: 100%;
   padding: 0 16px 12px;
   animation: contentFadeIn 0.3s ease 0.15s both;
+}
+
+.expanded-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.expanded-title {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.expanded-debug-toggle {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.expanded-debug-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 @keyframes contentFadeIn {
@@ -220,15 +259,26 @@ body {
 
 .session-row {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 8px;
   border-radius: 8px;
   transition: background 0.15s ease;
 }
 
 .session-row:hover {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.session-row--clickable {
+  cursor: pointer;
+}
+
+.session-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
 }
 
 .session-name {
@@ -256,6 +306,42 @@ body {
   flex-shrink: 0;
   min-width: 24px;
   text-align: right;
+}
+
+.session-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta-item {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-meta-folder {
+  max-width: 42%;
+}
+
+.session-meta-sep {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.session-row-preview {
+  width: 100%;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .expanded-empty {
