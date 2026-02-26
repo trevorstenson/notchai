@@ -385,3 +385,23 @@ body {
   font-size: 12px;
   color: var(--color-text-tertiary);
 }
+
+/* === Cost display === */
+.collapsed-sep {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.collapsed-cost {
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgba(102, 224, 163, 0.85);
+}
+
+.session-meta-cost {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: rgba(102, 224, 163, 0.75);
+}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   getCurrentWindow,
   LogicalSize,
@@ -8,6 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
+import { calculateSessionCost } from "./lib/pricing";
 import "./App.css";
 
 type ViewState = "hidden" | "collapsed" | "expanded";
@@ -30,6 +31,17 @@ const DEBUG_FIXED_WINDOW = DEBUG_MODE;
 function App() {
   const { sessions, operatingCount, notchInfo } =
     useAgentMonitor(1000);
+
+  const totalCost = useMemo(
+    () =>
+      sessions.reduce(
+        (sum, s) =>
+          sum + calculateSessionCost(s.totalInputTokens, s.totalOutputTokens, s.model),
+        0,
+      ),
+    [sessions],
+  );
+
   const [viewState, setViewState] = useState<ViewState>("collapsed");
   const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -165,6 +177,7 @@ function App() {
               <CollapsedView
                 sessions={sessions}
                 operatingCount={operatingCount}
+                totalCost={totalCost}
               />
               {viewState === "expanded" && (
                 <ExpandedView

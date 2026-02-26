@@ -1,12 +1,14 @@
 import { StatusDot } from "./StatusDot";
+import { formatCost } from "../lib/pricing";
 import type { AgentSession } from "../types";
 
 interface CollapsedViewProps {
   sessions: AgentSession[];
   operatingCount: number;
+  totalCost: number;
 }
 
-export function CollapsedView({ sessions, operatingCount }: CollapsedViewProps) {
+export function CollapsedView({ sessions, operatingCount, totalCost }: CollapsedViewProps) {
   const activeSessions = sessions.filter((s) => s.status !== "completed");
   const waitingCount = sessions.filter((s) => s.status === "waitingForInput").length;
   const visibleSessions = activeSessions.length > 0 ? activeSessions : sessions;
@@ -30,6 +32,12 @@ export function CollapsedView({ sessions, operatingCount }: CollapsedViewProps) 
         <span className="collapsed-count">{sessions.length} recent</span>
       ) : (
         <span className="collapsed-empty">notchai</span>
+      )}
+      {totalCost > 0 && (
+        <>
+          <span className="collapsed-sep">&middot;</span>
+          <span className="collapsed-cost">{formatCost(totalCost)}</span>
+        </>
       )}
     </div>
   );
