@@ -1,3 +1,4 @@
+use std::process::Command;
 use std::sync::Mutex;
 use std::path::Path;
 
@@ -111,13 +112,18 @@ impl AgentMonitor {
                     session_folder_name.clone()
                 };
 
+                let git_branch = entry.git_branch.clone()
+                    .filter(|b| !b.is_empty())
+                    .or_else(|| detect_git_branch(&session_folder_path))
+                    .unwrap_or_default();
+
                 AgentSession {
                     id: entry.session_id.clone(),
                     project_path: session_folder_path.clone(),
                     project_name,
                     session_folder_path,
                     session_folder_name,
-                    git_branch: entry.git_branch.clone().unwrap_or_default(),
+                    git_branch,
                     first_prompt: entry
                         .first_prompt
                         .as_deref()
@@ -215,5 +221,25 @@ impl AgentMonitor {
         let trimmed = &slug[1..];
         let decoded = format!("/{}", trimmed.replace('-', "/"));
         Some(decoded)
+    }
+}
+
+fn detect_git_branch(project_dir: &str) -> Option<String> {
+    if project_dir.is_empty() {
+        return None;
+    }
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        None
+    } else {
+        Some(branch)
     }
 }
