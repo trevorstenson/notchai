@@ -6,6 +6,7 @@ import {
 } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { useAgentMonitor } from "./hooks/useAgentMonitor";
+import { useSessionNotifications } from "./hooks/useSessionNotifications";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
 import { calculateSessionCost } from "./lib/pricing";
@@ -31,6 +32,7 @@ const DEBUG_FIXED_WINDOW = DEBUG_MODE;
 function App() {
   const { sessions, operatingCount, notchInfo } =
     useAgentMonitor(1000);
+  useSessionNotifications(sessions);
 
   const totalCost = useMemo(() => {
     const todayStart = new Date();

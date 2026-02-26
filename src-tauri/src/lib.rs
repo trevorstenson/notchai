@@ -766,6 +766,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(shortcut_plugin)
         .manage(AppState {
             monitor: Mutex::new(AgentMonitor::new()),
