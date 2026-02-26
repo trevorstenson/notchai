@@ -32,15 +32,17 @@ function App() {
   const { sessions, operatingCount, notchInfo } =
     useAgentMonitor(1000);
 
-  const totalCost = useMemo(
-    () =>
-      sessions.reduce(
-        (sum, s) =>
-          sum + calculateSessionCost(s.totalInputTokens, s.totalOutputTokens, s.model),
-        0,
-      ),
-    [sessions],
-  );
+  const totalCost = useMemo(() => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayMs = todayStart.getTime();
+
+    return sessions.reduce((sum, s) => {
+      const created = new Date(s.created).getTime();
+      if (Number.isNaN(created) || created < todayMs) return sum;
+      return sum + calculateSessionCost(s.totalInputTokens, s.totalOutputTokens, s.model);
+    }, 0);
+  }, [sessions]);
 
   const [viewState, setViewState] = useState<ViewState>("collapsed");
   const enterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
