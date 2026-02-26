@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { StatusDot } from "./StatusDot";
 import { STATUS_LABELS } from "../types";
+import { calculateSessionCost, formatCost } from "../lib/pricing";
 import type { AgentSession } from "../types";
 
 interface ExpandedViewProps {
@@ -212,9 +213,17 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
                   {session.gitBranch || "no-branch"}
                 </span>
                 <span className="session-meta-sep">•</span>
-                <span className="session-meta-item">
-                  in:{formatTokens(session.totalInputTokens)} out:
-                  {formatTokens(session.totalOutputTokens)}
+                <span
+                  className="session-meta-item session-meta-cost"
+                  title={`in:${formatTokens(session.totalInputTokens)} out:${formatTokens(session.totalOutputTokens)}`}
+                >
+                  {formatCost(
+                    calculateSessionCost(
+                      session.totalInputTokens,
+                      session.totalOutputTokens,
+                      session.model,
+                    )
+                  )}
                 </span>
               </div>
 
