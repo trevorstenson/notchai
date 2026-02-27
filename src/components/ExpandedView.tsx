@@ -201,6 +201,14 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
               </div>
 
               <div className="session-row-meta">
+                {session.agentType && session.agentType !== "claude" && (
+                  <>
+                    <span className="session-meta-item session-meta-agent-type">
+                      {session.agentType}
+                    </span>
+                    <span className="session-meta-sep">•</span>
+                  </>
+                )}
                 <span className="session-meta-item session-meta-folder">
                   folder:{folderLabel}
                 </span>

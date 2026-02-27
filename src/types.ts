@@ -1,3 +1,5 @@
+export type AgentType = "claude" | "codex" | "cursor";
+
 export type AgentStatus =
   | "operating"
   | "idle"
@@ -6,6 +8,7 @@ export type AgentStatus =
   | "completed";
 
 export interface AgentSession {
+  agentType: AgentType;
   id: string;
   projectPath: string;
   projectName: string;

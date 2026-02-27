@@ -2,6 +2,14 @@ use serde::{Deserialize, Serialize};
 
 // === Models sent to the frontend ===
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentType {
+    Claude,
+    Codex,
+    Cursor,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
@@ -15,6 +23,7 @@ pub enum AgentStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSession {
+    pub agent_type: AgentType,
     pub id: String,
     pub project_path: String,
     pub project_name: String,
