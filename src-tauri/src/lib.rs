@@ -42,7 +42,7 @@ fn get_sessions(state: tauri::State<'_, AppState>) -> Vec<AgentSession> {
 
 #[tauri::command]
 fn get_notch_info() -> NotchInfo {
-    notch::detect_notch()
+    notch::detect_notch().info
 }
 
 #[tauri::command]
@@ -677,12 +677,15 @@ fn start_global_hover_monitor(
     hover_width: f64,
     hover_height: f64,
     expanded_height: f64,
+    screen_top_macos_y: f64,
 ) {
     thread::spawn(move || {
         let mut was_inside = false;
 
         loop {
-            if let Some((mouse_x, mouse_y_from_top)) = current_mouse_position_from_top_left() {
+            if let Some((mouse_x, mouse_y_from_top)) =
+                current_mouse_position_from_top_left(screen_top_macos_y)
+            {
                 let left = center_x - hover_width / 2.0;
                 let right = left + hover_width;
                 // Hysteresis:
@@ -714,8 +717,8 @@ fn start_global_hover_monitor(
 }
 
 #[cfg(target_os = "macos")]
-fn current_mouse_position_from_top_left() -> Option<(f64, f64)> {
-    use objc::runtime::{Class, Object};
+fn current_mouse_position_from_top_left(screen_top_macos_y: f64) -> Option<(f64, f64)> {
+    use objc::runtime::Class;
     use objc::{msg_send, sel, sel_impl};
 
     #[repr(C)]
@@ -725,32 +728,11 @@ fn current_mouse_position_from_top_left() -> Option<(f64, f64)> {
         y: f64,
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGSize {
-        width: f64,
-        height: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct CGRect {
-        origin: CGPoint,
-        size: CGSize,
-    }
-
     unsafe {
         let ns_event_class = Class::get("NSEvent")?;
-        let ns_screen_class = Class::get("NSScreen")?;
-
         let mouse: CGPoint = msg_send![ns_event_class, mouseLocation];
-        let main_screen: *mut Object = msg_send![ns_screen_class, mainScreen];
-        if main_screen.is_null() {
-            return None;
-        }
-
-        let frame: CGRect = msg_send![main_screen, frame];
-        let from_top = frame.size.height - mouse.y;
+        // Convert macOS bottom-left coords to distance from top of the notch screen.
+        let from_top = screen_top_macos_y - mouse.y;
         Some((mouse.x, from_top))
     }
 }
@@ -784,14 +766,17 @@ pub fn run() {
             // Detect notch and position an invisible hover zone over it.
             // The zone is larger than the notch so the mouse can be
             // detected approaching from the sides or below.
-            let notch = notch::detect_notch();
+            // Iterates all screens to find the one with a physical notch,
+            // so this works even when an external monitor is primary.
+            let detection = notch::detect_notch();
+            let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.
             let hover_height = 320.0;
             let x = notch.center_x() - hover_width / 2.0;
 
             window
-                .set_position(tauri::LogicalPosition::new(x, 0.0))
+                .set_position(tauri::LogicalPosition::new(x, notch.y))
                 .ok();
             window
                 .set_size(tauri::LogicalSize::new(hover_width, hover_height))
@@ -806,6 +791,7 @@ pub fn run() {
                     hover_width,
                     60.0,
                     320.0,
+                    detection.screen_top_macos_y,
                 );
             }
 
