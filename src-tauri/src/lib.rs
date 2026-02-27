@@ -1,9 +1,12 @@
+mod adapter;
+mod adapters;
 mod models;
 mod monitor;
 mod notch;
 mod process;
 mod scanner;
 mod transcript;
+mod util;
 
 use std::sync::Mutex;
 use std::process::Command;
@@ -769,7 +772,11 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(shortcut_plugin)
         .manage(AppState {
-            monitor: Mutex::new(AgentMonitor::new()),
+            monitor: Mutex::new(AgentMonitor::new(vec![
+                Box::new(adapters::claude::ClaudeAdapter::new()),
+                Box::new(adapters::codex::CodexAdapter::new()),
+                Box::new(adapters::cursor::CursorAdapter::new()),
+            ])),
         })
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
