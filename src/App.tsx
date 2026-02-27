@@ -60,26 +60,32 @@ function App() {
     return notchInfo ? notchInfo.x + notchInfo.width / 2 : 756;
   }, [notchInfo]);
 
+  const getScreenY = useCallback(() => {
+    return notchInfo?.y ?? 0;
+  }, [notchInfo]);
+
   const resizeToHoverZone = useCallback(async () => {
     const win = getCurrentWindow();
     const centerX = getCenterX();
-    debugLog("[notchai-ui] resizeToHoverZone", { centerX });
+    const screenY = getScreenY();
+    debugLog("[notchai-ui] resizeToHoverZone", { centerX, screenY });
     const height = DEBUG_FIXED_WINDOW ? ACTIVE_HEIGHT : HOVER_ZONE_HEIGHT;
     await win.setSize(new LogicalSize(HOVER_ZONE_WIDTH, height));
     await win.setPosition(
-      new LogicalPosition(centerX - HOVER_ZONE_WIDTH / 2, 0)
+      new LogicalPosition(centerX - HOVER_ZONE_WIDTH / 2, screenY)
     );
-  }, [debugLog, getCenterX]);
+  }, [debugLog, getCenterX, getScreenY]);
 
   const resizeToActive = useCallback(async () => {
     const win = getCurrentWindow();
     const centerX = getCenterX();
-    debugLog("[notchai-ui] resizeToActive", { centerX });
+    const screenY = getScreenY();
+    debugLog("[notchai-ui] resizeToActive", { centerX, screenY });
     await win.setSize(new LogicalSize(ACTIVE_WIDTH, ACTIVE_HEIGHT));
     await win.setPosition(
-      new LogicalPosition(centerX - ACTIVE_WIDTH / 2, 0)
+      new LogicalPosition(centerX - ACTIVE_WIDTH / 2, screenY)
     );
-  }, [debugLog, getCenterX]);
+  }, [debugLog, getCenterX, getScreenY]);
 
   const clearInteractionTimers = useCallback(() => {
     if (enterTimerRef.current) {
