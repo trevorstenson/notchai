@@ -1,13 +1,18 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type MutableRefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentSession, NotchInfo } from "../types";
 
-export function useAgentMonitor(pollIntervalMs = 2000) {
+export function useAgentMonitor(
+  pollIntervalMs = 2000,
+  animatingRef?: MutableRefObject<boolean>,
+) {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
   const [notchInfo, setNotchInfo] = useState<NotchInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchSessions = useCallback(async () => {
+    // Skip updates during animation to avoid mid-animation re-renders
+    if (animatingRef?.current) return;
     try {
       const result = await invoke<AgentSession[]>("get_sessions");
       setSessions(result);
@@ -15,7 +20,7 @@ export function useAgentMonitor(pollIntervalMs = 2000) {
     } catch (err) {
       setError(String(err));
     }
-  }, []);
+  }, [animatingRef]);
 
   const fetchNotchInfo = useCallback(async () => {
     try {

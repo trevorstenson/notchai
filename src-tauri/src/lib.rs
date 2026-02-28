@@ -711,7 +711,7 @@ fn start_global_hover_monitor(
                 }
             }
 
-            thread::sleep(Duration::from_millis(80));
+            thread::sleep(Duration::from_millis(16));
         }
     });
 }
@@ -789,7 +789,7 @@ pub fn run() {
                     app.handle().clone(),
                     notch.center_x(),
                     hover_width,
-                    60.0,
+                    24.0,
                     320.0,
                     detection.screen_top_macos_y,
                 );
