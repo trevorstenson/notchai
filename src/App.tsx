@@ -4,6 +4,7 @@ import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { useSessionNotifications } from "./hooks/useSessionNotifications";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
+import { NotchArc } from "./components/NotchArc";
 import { calculateSessionCost } from "./lib/pricing";
 import "./App.css";
 
@@ -20,8 +21,8 @@ function App() {
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { sessions, operatingCount } =
-    useAgentMonitor(1000, animatingRef);
+  const { sessions, activeSessions, operatingCount, notchInfo } =
+    useAgentMonitor(3000, animatingRef);
   useSessionNotifications(sessions);
 
   const totalCost = useMemo(() => {
@@ -113,6 +114,13 @@ function App() {
 
   return (
     <div className={`notch-root notch-root--${viewState}`}>
+      {notchInfo && activeSessions.length > 0 && (
+        <NotchArc
+          sessions={activeSessions}
+          notchInfo={notchInfo}
+          viewState={viewState}
+        />
+      )}
       <div className="island-wrapper">
         <div
           className={`island island--${viewState}`}
