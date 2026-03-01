@@ -16,8 +16,17 @@ pub enum AgentStatus {
     Operating,
     Idle,
     WaitingForInput,
+    WaitingForApproval,
     Error,
     Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingToolInfo {
+    pub request_id: String,
+    pub tool_name: String,
+    pub tool_input_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
