@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::adapter::AgentAdapter;
@@ -10,6 +12,7 @@ use crate::models::{
 use crate::process::ProcessDetector;
 use crate::util::detect_git_branch;
 
+#[derive(Clone)]
 struct GeminiSessionData {
     id: String,
     project_hash: String,
@@ -22,12 +25,16 @@ struct GeminiSessionData {
 
 pub struct GeminiAdapter {
     process_detector: ProcessDetector,
+    mtime_cache: Mutex<HashMap<String, SystemTime>>,
+    session_cache: Mutex<HashMap<String, GeminiSessionData>>,
 }
 
 impl GeminiAdapter {
     pub fn new() -> Self {
         Self {
             process_detector: ProcessDetector::new(),
+            mtime_cache: Mutex::new(HashMap::new()),
+            session_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -175,6 +182,29 @@ impl GeminiAdapter {
             total_input_tokens,
             total_output_tokens,
         })
+    }
+
+    fn parse_session_cached(&self, path: &Path, project_hash: &str) -> Option<GeminiSessionData> {
+        let key = path.to_string_lossy().to_string();
+
+        let current_mtime = fs::metadata(path).ok()?.modified().ok()?;
+
+        let mut mtime_cache = self.mtime_cache.lock().unwrap();
+        let mut session_cache = self.session_cache.lock().unwrap();
+
+        if let Some(cached_mtime) = mtime_cache.get(&key) {
+            if *cached_mtime == current_mtime {
+                return session_cache.get(&key).cloned();
+            }
+        }
+
+        // mtime changed or first read — parse the file
+        let data = self.parse_session(path, project_hash)?;
+
+        mtime_cache.insert(key.clone(), current_mtime);
+        session_cache.insert(key, data.clone());
+
+        Some(data)
     }
 
     fn resolve_status(
@@ -329,7 +359,7 @@ impl AgentAdapter for GeminiAdapter {
         let mut sessions: Vec<AgentSession> = files
             .iter()
             .filter_map(|(path, project_hash)| {
-                let data = self.parse_session(path, project_hash)?;
+                let data = self.parse_session_cached(path, project_hash)?;
                 let file_age = self.process_detector.get_jsonl_age_secs(&path.to_string_lossy());
                 let status = Self::resolve_status(is_gemini_running, file_age);
 

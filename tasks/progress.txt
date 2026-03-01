@@ -9,6 +9,10 @@
 - Claude Code settings.json hooks format: `{"hooks": {"EventType": [{"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/script.py"}]}]}}`
 - Hook installer uses `NOTCHAI_HOOK_MARKER = "notchai-hook.py"` to identify our entries for idempotent install/uninstall
 - Codex CLI config is TOML at `~/.codex/config.toml`; notify uses `notify = ["command", "arg1"]` array format
+- Codex adapter uses `std::sync::Mutex` (not tokio) for caches since `get_sessions()` is sync; offsets keyed by file path string
+- Gemini adapter uses mtime-based caching: `HashMap<String, SystemTime>` + `HashMap<String, GeminiSessionData>` for skip-if-unchanged
+- For incremental JSONL reads: `BufReader<&File>` supports both `BufRead` and `Seek` — `seek()` invalidates the internal buffer correctly
+- Codex token_count events report cumulative totals (assigned, not accumulated) — safe for incremental reads since latest value is always correct
 - Codex hook installer uses `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` for idempotent install; script copied to `~/.notchai/hooks/`
 - `codex_hooks_enabled` flag stored alongside `hooks_enabled` in `~/.notchai/config.json` (defaults to true)
 - `map_hook_to_normalized_event()` now takes `agent` param; determines AgentType and EventSource dynamically (codex→Codex+Notify, default→Claude+Hook)
@@ -39,6 +43,9 @@
 - OTEL server uses axum 0.8 with `Router::new().route(path, post(handler)).with_state(event_bus)` pattern; handler takes `(State<EventBus>, HeaderMap, Bytes)` extractors
 - Hook event → NormalizedEvent mapping: PreToolUse→ToolStarted, PostToolUse→ToolCompleted, Stop/SubagentStop/SessionEnd→SessionEnded, SessionStart→SessionStarted, UserPromptSubmit→StatusChanged(Operating); PermissionRequest stays on direct Tauri path
 - EventBus Tauri bridge pattern: `event_bus.subscribe()` returns a broadcast::Receiver, loop with `rx.recv().await` and emit Tauri events; handle `Lagged` by logging and continuing, `Closed` by breaking
+- Approval dedup uses (session_id, tool_name, tool_use_id) composite key; tool_use_id comes from PreToolUse cache since PermissionRequest doesn't include it
+- `APPROVAL_TTL_SECS = 300` (5 min) — pending approvals expire via tokio::time::sleep branch in select!; TTL sends deny response + `hook:permission-cancelled` event
+- Frontend `filterStaleApprovals()` runs on every `setPendingApprovals` update as a safety net — not timer-based
 - opentelemetry-proto 0.28 with features `["gen-tonic-messages", "trace"]` provides protobuf message types at `opentelemetry_proto::tonic::collector::trace::v1::*`
 - OTEL span attribute values use `opentelemetry_proto::tonic::common::v1::any_value::Value` enum — extract string with `Value::StringValue(s)`
 - For graceful port-already-in-use: `match tokio::net::TcpListener::bind(addr).await { Err(e) => { log warning; return; } }` — app keeps running without OTEL server
@@ -193,4 +200,40 @@
   - Unknown hook event types should always map to a NormalizedEvent (StatusChanged Operating) rather than being silently dropped — this ensures the UI stays responsive to new Claude Code events
   - The `hook:notification` Tauri event is separate from `hook:status-update` — status updates control session status merging while notifications control the brief text flash in collapsed view
   - `notificationText` auto-clears after 4 seconds via `setTimeout` in useHookEvents — the timer ref is cleaned up on unmount
+---
+
+## 2026-03-01 - US-022
+- Added `APPROVAL_TTL_SECS` constant (300) to hook_server.rs for configurable TTL
+- Added `dedup_map: Arc<Mutex<HashMap<(String, String, String), String>>>` to HookServer — maps (session_id, tool_name, tool_use_id) → request_id
+- When a duplicate PermissionRequest arrives, the old oneshot sender is dropped (cancelled), old request_id removed from pending map, and `hook:permission-cancelled` Tauri event emitted
+- Added `tokio::time::sleep(Duration::from_secs(APPROVAL_TTL_SECS))` as a third branch in the `select!` macro — expired approvals get a deny response and `hook:permission-cancelled` event
+- All three `select!` branches (response, disconnect, TTL) clean up the dedup_map entry on exit
+- Frontend: added `APPROVAL_TTL_MS` (300000) constant and `filterStaleApprovals()` helper to useHookEvents.ts
+- `setPendingApprovals` calls on permission-request and permission-cancelled listeners now filter through `filterStaleApprovals()` as a safety net
+- Files changed: src-tauri/src/hook_server.rs, src/hooks/useHookEvents.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - The dedup key uses tool_use_id from the PreToolUse cache (since PermissionRequest doesn't carry it directly) — defaults to empty string if no cached value
+  - tokio::select! branches must clean up both `pending` and `dedup_map` — forgetting either causes leaks
+  - The TTL branch sends a deny response to the hook script before emitting the cancelled event — the hook script still receives a valid JSON response
+  - Frontend TTL filter runs opportunistically on every state update, not on a timer — this is a safety net, not the primary expiration mechanism
+  - `Duration::from_secs()` requires `use std::time::Duration` import in hook_server.rs
+---
+
+## 2026-03-01 - US-023
+- Added incremental byte-offset reading to Codex adapter using `Mutex<HashMap<String, u64>>` for offsets and `Mutex<HashMap<String, CodexSessionData>>` for cached session data
+- On first read: files <= 50KB read entirely; files > 50KB read header (first ~4KB for session_meta/turn_context) + last 50KB (for recent events)
+- On subsequent reads: seeks to stored byte offset, reads only new lines, merges into cached session data
+- Added mtime-based skip to Gemini adapter: tracks `HashMap<String, SystemTime>` for file modification times, skips re-parsing when mtime unchanged
+- Gemini cached session data stored in `Mutex<HashMap<String, GeminiSessionData>>`, returned directly when mtime matches
+- Both adapters accumulate state incrementally: Codex message_count += new messages, token_count overwrites with latest cumulative total; Gemini re-parses only on file change
+- CodexSessionData changed to `#[derive(Clone, Default)]` with `id: Option<String>` for incremental building
+- GeminiSessionData changed to `#[derive(Clone)]` for cache storage
+- Files changed: src-tauri/src/adapters/codex.rs, src-tauri/src/adapters/gemini.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - `std::sync::Mutex` (not tokio) is required for adapter caches since `get_sessions()` is synchronous (called from poll thread)
+  - `BufReader<&File>` supports both `BufRead` and `Seek` — `seek()` correctly invalidates the BufReader's internal buffer
+  - Codex `total_token_usage` in `token_count` events is cumulative (uses `=` not `+=`) — safe for incremental reads since the latest value is always the correct total
+  - For large JSONL files, reading header (first few lines) + tail (last 50KB) captures both session metadata and recent activity while skipping the middle
+  - Gemini files are JSON (not JSONL) so incremental byte-offset reading doesn't apply — mtime-based skip is the right optimization
+  - Both caches hold two Mutex locks simultaneously (`offsets` + `session_cache` for Codex, `mtime_cache` + `session_cache` for Gemini) — safe since always acquired in same order and held briefly
 ---

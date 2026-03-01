@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -11,6 +12,11 @@ use crate::adapter::AgentAdapter;
 use crate::models::{AgentSession, AgentStatus, AgentType};
 use crate::process::ProcessDetector;
 use crate::util::detect_git_branch;
+
+// --- Constants ---
+
+/// Maximum bytes to read on first parse of a Codex session JSONL file.
+const MAX_INITIAL_BYTES: u64 = 50 * 1024;
 
 // --- Serde structs for Codex JSONL entries ---
 
@@ -68,8 +74,9 @@ struct HistoryEntry {
 
 // --- Parsed session data ---
 
+#[derive(Clone, Default)]
 struct CodexSessionData {
-    id: String,
+    id: Option<String>,
     cwd: String,
     git_branch: Option<String>,
     model: Option<String>,
@@ -87,6 +94,8 @@ pub struct CodexAdapter {
     sessions_dir: PathBuf,
     history_path: PathBuf,
     process_detector: ProcessDetector,
+    offsets: Mutex<HashMap<String, u64>>,
+    session_cache: Mutex<HashMap<String, CodexSessionData>>,
 }
 
 impl CodexAdapter {
@@ -96,6 +105,8 @@ impl CodexAdapter {
             sessions_dir: home.join(".codex").join("sessions"),
             history_path: home.join(".codex").join("history.jsonl"),
             process_detector: ProcessDetector::new(),
+            offsets: Mutex::new(HashMap::new()),
+            session_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -207,101 +218,155 @@ impl CodexAdapter {
         map
     }
 
-    fn parse_session(&self, path: &Path) -> Option<CodexSessionData> {
+    fn parse_session_incremental(&self, path: &Path) -> Option<CodexSessionData> {
+        let key = path.to_string_lossy().to_string();
+
         let file = fs::File::open(path).ok()?;
-        let reader = BufReader::new(file);
+        let file_size = file.metadata().ok()?.len();
+        if file_size == 0 {
+            return None;
+        }
 
-        let mut id = None;
-        let mut cwd = String::new();
-        let mut git_branch = None;
-        let mut model = None;
-        let mut created = String::new();
-        let mut first_user_message = None;
-        let mut last_event_type = None;
-        let mut message_count: u32 = 0;
-        let mut total_input_tokens: u64 = 0;
-        let mut total_output_tokens: u64 = 0;
+        let mut offsets = self.offsets.lock().unwrap();
+        let mut cache = self.session_cache.lock().unwrap();
 
-        for line in reader.lines().flatten() {
-            let entry: CodexEntry = match serde_json::from_str(&line) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+        let stored_offset = offsets.get(&key).copied().unwrap_or(0);
 
-            match entry.entry_type.as_str() {
-                "session_meta" => {
-                    if let Ok(meta) = serde_json::from_value::<SessionMetaPayload>(entry.payload) {
-                        id = Some(meta.id);
-                        cwd = meta.cwd.unwrap_or_default();
-                        created = meta.timestamp.unwrap_or_default();
-                        if let Some(git) = meta.git {
-                            git_branch = git.branch;
-                        }
+        // No new data since last read
+        if stored_offset >= file_size {
+            return cache.get(&key).cloned().filter(|d| d.id.is_some());
+        }
+
+        let cached = cache.entry(key.clone()).or_default();
+        let mut reader = BufReader::new(&file);
+        let mut line = String::new();
+
+        if stored_offset == 0 {
+            // First read
+            if file_size > MAX_INITIAL_BYTES {
+                // Read header lines for session metadata (session_meta, turn_context)
+                let mut bytes_read = 0u64;
+                loop {
+                    line.clear();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    bytes_read += n as u64;
+                    Self::apply_line(cached, &line);
+                    if bytes_read >= 4096
+                        || (cached.id.is_some() && cached.model.is_some())
+                    {
+                        break;
                     }
                 }
-                "turn_context" => {
-                    if let Ok(ctx) = serde_json::from_value::<TurnContextPayload>(entry.payload) {
-                        if ctx.model.is_some() {
-                            model = ctx.model;
-                        }
+
+                // Seek to last 50KB for recent events
+                let tail_start = file_size - MAX_INITIAL_BYTES;
+                if reader.seek(SeekFrom::Start(tail_start)).is_ok() {
+                    line.clear();
+                    let _ = reader.read_line(&mut line); // skip partial line
+                    line.clear();
+                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                        Self::apply_line(cached, &line);
+                        line.clear();
                     }
                 }
-                "event_msg" => {
-                    if let Ok(evt) = serde_json::from_value::<EventMsgPayload>(entry.payload) {
-                        match evt.event_type.as_deref() {
-                            Some("user_message") => {
-                                message_count += 1;
-                                if first_user_message.is_none() {
-                                    first_user_message = evt.message;
-                                }
-                                last_event_type = Some("user_message".to_string());
-                            }
-                            Some("agent_message") => {
-                                message_count += 1;
-                                last_event_type = Some("agent_message".to_string());
-                            }
-                            Some("task_complete") => {
-                                last_event_type = Some("task_complete".to_string());
-                            }
-                            Some("task_started") => {
-                                last_event_type = Some("task_started".to_string());
-                            }
-                            Some("token_count") => {
-                                if let Some(info) = evt.info {
-                                    if let Some(usage) = info.total_token_usage {
-                                        total_input_tokens = usage
-                                            .input_tokens
-                                            .unwrap_or(0)
-                                            + usage.cached_input_tokens.unwrap_or(0);
-                                        total_output_tokens = usage
-                                            .output_tokens
-                                            .unwrap_or(0)
-                                            + usage.reasoning_output_tokens.unwrap_or(0);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+            } else {
+                // File fits within limit — read everything
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    Self::apply_line(cached, &line);
+                    line.clear();
                 }
-                _ => {}
+            }
+        } else {
+            // Subsequent read — only read new data from last offset
+            if reader.seek(SeekFrom::Start(stored_offset)).is_ok() {
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    Self::apply_line(cached, &line);
+                    line.clear();
+                }
             }
         }
 
-        let id = id?;
+        *offsets.entry(key).or_insert(0) = file_size;
 
-        Some(CodexSessionData {
-            id,
-            cwd,
-            git_branch,
-            model,
-            created,
-            first_user_message,
-            last_event_type,
-            message_count,
-            total_input_tokens,
-            total_output_tokens,
-        })
+        if cached.id.is_some() {
+            Some(cached.clone())
+        } else {
+            None
+        }
+    }
+
+    fn apply_line(data: &mut CodexSessionData, line: &str) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let entry: CodexEntry = match serde_json::from_str(trimmed) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        match entry.entry_type.as_str() {
+            "session_meta" => {
+                if let Ok(meta) = serde_json::from_value::<SessionMetaPayload>(entry.payload) {
+                    data.id = Some(meta.id);
+                    data.cwd = meta.cwd.unwrap_or_default();
+                    data.created = meta.timestamp.unwrap_or_default();
+                    if let Some(git) = meta.git {
+                        data.git_branch = git.branch;
+                    }
+                }
+            }
+            "turn_context" => {
+                if let Ok(ctx) = serde_json::from_value::<TurnContextPayload>(entry.payload) {
+                    if ctx.model.is_some() {
+                        data.model = ctx.model;
+                    }
+                }
+            }
+            "event_msg" => {
+                if let Ok(evt) = serde_json::from_value::<EventMsgPayload>(entry.payload) {
+                    match evt.event_type.as_deref() {
+                        Some("user_message") => {
+                            data.message_count += 1;
+                            if data.first_user_message.is_none() {
+                                data.first_user_message = evt.message;
+                            }
+                            data.last_event_type = Some("user_message".to_string());
+                        }
+                        Some("agent_message") => {
+                            data.message_count += 1;
+                            data.last_event_type = Some("agent_message".to_string());
+                        }
+                        Some("task_complete") => {
+                            data.last_event_type = Some("task_complete".to_string());
+                        }
+                        Some("task_started") => {
+                            data.last_event_type = Some("task_started".to_string());
+                        }
+                        Some("token_count") => {
+                            if let Some(info) = evt.info {
+                                if let Some(usage) = info.total_token_usage {
+                                    data.total_input_tokens = usage
+                                        .input_tokens
+                                        .unwrap_or(0)
+                                        + usage.cached_input_tokens.unwrap_or(0);
+                                    data.total_output_tokens = usage
+                                        .output_tokens
+                                        .unwrap_or(0)
+                                        + usage.reasoning_output_tokens.unwrap_or(0);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn resolve_status(
@@ -362,13 +427,14 @@ impl AgentAdapter for CodexAdapter {
         let mut sessions: Vec<AgentSession> = files
             .iter()
             .filter_map(|path| {
-                let data = self.parse_session(path)?;
+                let data = self.parse_session_incremental(path)?;
+                let id = data.id?;
                 let file_age = self.process_detector.get_jsonl_age_secs(&path.to_string_lossy());
                 let status =
                     Self::resolve_status(is_codex_running, file_age, data.last_event_type.as_deref());
 
                 let first_prompt = history
-                    .get(&data.id)
+                    .get(&id)
                     .cloned()
                     .or(data.first_user_message)
                     .unwrap_or_default()
@@ -395,7 +461,7 @@ impl AgentAdapter for CodexAdapter {
 
                 Some(AgentSession {
                     agent_type: AgentType::Codex,
-                    id: data.id,
+                    id,
                     project_path: data.cwd.clone(),
                     project_name,
                     session_folder_path,
