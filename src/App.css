@@ -152,6 +152,15 @@ body {
   text-shadow: 0 0 6px rgba(255, 140, 0, 0.45);
 }
 
+.collapsed-count--notification {
+  color: #00d4ff;
+  text-shadow: 0 0 6px rgba(0, 212, 255, 0.45);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .collapsed-empty {
   font-size: 12px;
   font-weight: 500;

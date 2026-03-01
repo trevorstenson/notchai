@@ -13,6 +13,20 @@ pub struct HookMessage {
     pub timestamp: Option<String>,
     /// JSON string of permission_suggestions from Claude Code PermissionRequest events.
     pub permission_suggestions: Option<String>,
+    /// Title from Notification hook events.
+    pub title: Option<String>,
+    /// Message body from Notification hook events.
+    pub message: Option<String>,
+}
+
+/// Payload emitted as a Tauri event for Notification hook events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotificationPayload {
+    pub session_id: String,
+    pub title: String,
+    pub message: String,
+    pub timestamp: String,
 }
 
 /// Decision sent back to the hook script for permission requests

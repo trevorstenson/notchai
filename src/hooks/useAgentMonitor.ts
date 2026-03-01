@@ -17,6 +17,7 @@ export function useAgentMonitor(
     pendingApprovals,
     respondToApproval,
     setOnSessionStart,
+    notificationText,
   } = useHookEvents();
 
   const { eventBusStates } = useEventBus();
@@ -91,5 +92,6 @@ export function useAgentMonitor(
     refresh: fetchSessions,
     pendingApprovals,
     respondToApproval,
+    notificationText,
   };
 }

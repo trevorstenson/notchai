@@ -31,6 +31,11 @@
 - `AgentMonitor::get_tool_calls()` tries each adapter and returns first non-empty result — session IDs are unique across adapters
 - CSS `--island-expanded-height` and Rust `hover_height`/`expanded_height` must stay in sync; hover_height >= CSS height to keep mouse in zone
 - Use `e.stopPropagation()` on nested interactive elements inside clickable session rows to prevent parent click handlers from firing
+- Notification hook events from Claude Code carry `title` and `message` fields (not `tool_name`/`tool_input`); Python hook forwards them as separate fields in HookMessage
+- `tauri_plugin_notification::NotificationExt` provides `app_handle.notification().builder().title().body().show()` for macOS native notifications
+- Unknown/new hook event types are published as `NormalizedEvent::StatusChanged(Operating)` — never silently dropped — so the UI always reflects agent activity
+- `hook:notification` Tauri event carries `NotificationPayload { sessionId, title, message, timestamp }` for frontend notification display
+- `useHookEvents` exposes `notificationText` (auto-clears after 4 seconds) for brief notification flash in collapsed view
 - OTEL server uses axum 0.8 with `Router::new().route(path, post(handler)).with_state(event_bus)` pattern; handler takes `(State<EventBus>, HeaderMap, Bytes)` extractors
 - Hook event → NormalizedEvent mapping: PreToolUse→ToolStarted, PostToolUse→ToolCompleted, Stop/SubagentStop/SessionEnd→SessionEnded, SessionStart→SessionStarted, UserPromptSubmit→StatusChanged(Operating); PermissionRequest stays on direct Tauri path
 - EventBus Tauri bridge pattern: `event_bus.subscribe()` returns a broadcast::Receiver, loop with `rx.recv().await` and emit Tauri events; handle `Lagged` by logging and continuing, `Closed` by breaking
@@ -168,4 +173,24 @@
   - Both hooks toggles share the same `saving` mutex to prevent concurrent toggle operations
   - `save_settings` requires all settings fields (hooksEnabled, codexHooksEnabled, selectedScreen, soundEnabled) — omitting one will cause a Tauri invoke error
   - The toggle follows the exact same pattern as Claude hooks toggle: optimistic update after successful invoke, not before
+---
+
+## 2026-03-01 - US-021
+- Reviewed all 9 Claude Code hook event types — already registered in hook_installer.rs (PreToolUse, PostToolUse, PermissionRequest, UserPromptSubmit, Notification, Stop, SubagentStop, SessionStart, SessionEnd)
+- Updated Python hook script to forward `title` and `message` fields for Notification events
+- Added `title` and `message` optional fields to HookMessage, and `NotificationPayload` struct to hook_models.rs
+- hook_server.rs now handles Notification events: triggers macOS notification via `tauri_plugin_notification::NotificationExt` and emits `hook:notification` Tauri event
+- Changed catch-all `_` in `map_hook_to_normalized_event` to publish `StatusChanged(Operating)` instead of returning None — unknown events are never silently dropped
+- Updated `hookEventToStatus` in useHookEvents.ts: added SessionStart, Notification, and default case all mapping to "operating"
+- Added `hook:notification` listener in useHookEvents with 4-second auto-clear `notificationText` state
+- Plumbed `notificationText` through useAgentMonitor → App → CollapsedView
+- CollapsedView shows notification title text (cyan color, max 160px with ellipsis) when present, replacing normal status briefly
+- Added `.collapsed-count--notification` CSS class
+- Files changed: resources/notchai-hook.py, src-tauri/src/hook_models.rs, src-tauri/src/hook_server.rs, src/App.css, src/App.tsx, src/components/CollapsedView.tsx, src/hooks/useAgentMonitor.ts, src/hooks/useHookEvents.ts, src/types/hooks.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - Claude Code Notification events carry `title` and `message` fields in hook_input, not `tool_name`/`tool_input` — the Python hook must explicitly forward them
+  - `tauri-plugin-notification` (already a dependency) provides `NotificationExt` trait on `AppHandle` — `app_handle.notification().builder().title().body().show()` triggers native macOS notification
+  - Unknown hook event types should always map to a NormalizedEvent (StatusChanged Operating) rather than being silently dropped — this ensures the UI stays responsive to new Claude Code events
+  - The `hook:notification` Tauri event is separate from `hook:status-update` — status updates control session status merging while notifications control the brief text flash in collapsed view
+  - `notificationText` auto-clears after 4 seconds via `setTimeout` in useHookEvents — the timer ref is cleaned up on unmount
 ---

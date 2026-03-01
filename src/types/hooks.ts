@@ -26,6 +26,13 @@ export interface HookSessionState {
   pendingApproval: PermissionRequestEvent | null;
 }
 
+export interface NotificationEvent {
+  sessionId: string;
+  title: string;
+  message: string;
+  timestamp: string;
+}
+
 // AskUserQuestion tool input schema
 export interface AskUserQuestionOption {
   label: string;

@@ -23,7 +23,7 @@ function App() {
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { sessions, activeSessions, operatingCount, notchInfo, pendingApprovals, respondToApproval } =
+  const { sessions, activeSessions, operatingCount, notchInfo, pendingApprovals, respondToApproval, notificationText } =
     useAgentMonitor(3000, animatingRef);
   useSessionNotifications(sessions);
 
@@ -201,6 +201,7 @@ function App() {
                   operatingCount={operatingCount}
                   totalCost={totalCost}
                   pendingApprovalCount={pendingApprovals.length}
+                  notificationText={notificationText}
                 />
               )}
               {hasPendingApprovals && viewState !== "settings" && (

@@ -3,13 +3,15 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json;
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{oneshot, Mutex};
 
 use crate::event_bus::EventBus;
 use crate::hook_models::{
-    HookMessage, HookStatusPayload, PermissionDecision, PermissionRequestPayload,
+    HookMessage, HookStatusPayload, NotificationPayload, PermissionDecision,
+    PermissionRequestPayload,
 };
 use crate::models::{AgentStatus, AgentType, EventSource, NormalizedEvent};
 
@@ -232,6 +234,29 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                     let _ = app_handle.emit("hook:status-update", &payload);
                 }
 
+                // Handle Notification events: trigger macOS notification and emit to frontend
+                if msg.event_type == "Notification" && !session_id.is_empty() {
+                    let title = msg.title.clone().unwrap_or_else(|| "Notchai".to_string());
+                    let message = msg.message.clone().unwrap_or_default();
+
+                    // Trigger macOS native notification
+                    let _ = app_handle
+                        .notification()
+                        .builder()
+                        .title(&title)
+                        .body(&message)
+                        .show();
+
+                    // Emit to frontend for collapsed view display
+                    let notif_payload = NotificationPayload {
+                        session_id: session_id.clone(),
+                        title,
+                        message,
+                        timestamp: timestamp.clone(),
+                    };
+                    let _ = app_handle.emit("hook:notification", &notif_payload);
+                }
+
                 // Publish NormalizedEvent to the EventBus
                 if !session_id.is_empty() {
                     if let Some(normalized) = map_hook_to_normalized_event(
@@ -327,12 +352,25 @@ fn map_hook_to_normalized_event(
             timestamp: ts,
             source,
         }),
+        "Notification" => Some(NormalizedEvent::StatusChanged {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+            new_status: AgentStatus::Operating,
+        }),
         _ => {
             eprintln!(
-                "[hook_server] unmapped hook event type '{}' for session {}",
+                "[hook_server] unknown hook event type '{}' for session {}, publishing generic StatusChanged",
                 event_type, session_id
             );
-            None
+            Some(NormalizedEvent::StatusChanged {
+                agent_type,
+                session_id: sid,
+                timestamp: ts,
+                source,
+                new_status: AgentStatus::Operating,
+            })
         }
     }
 }
