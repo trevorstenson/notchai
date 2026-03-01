@@ -1,0 +1,216 @@
+{
+  "project": "Notchai",
+  "branchName": "ralph/unified-realtime-event-pipeline",
+  "description": "Unified Real-Time Event Pipeline - OTEL ingestion, Codex notify hooks, expanded Claude hook coverage, and pipeline hardening",
+  "userStories": [
+    {
+      "id": "US-013",
+      "title": "Define NormalizedEvent types and EventBus module",
+      "description": "As a developer, I need a unified event model and broadcast channel so all event sources (OTEL, hooks, Codex notify, polling) produce the same type and downstream consumers are source-agnostic.",
+      "acceptanceCriteria": [
+        "Add NormalizedEvent enum to src-tauri/src/models.rs with variants: SessionStarted, SessionEnded, ToolStarted, ToolCompleted, StatusChanged, TokensUsed, PermissionRequested, TaskCompleted, Error",
+        "Each variant carries common fields: agent_type (AgentType), session_id (String), timestamp (String), source (EventSource enum: Otel, Hook, Notify, Poll)",
+        "Variant-specific fields: ToolStarted has tool_name/tool_input, ToolCompleted adds status/duration_ms/result_preview, StatusChanged has new_status (AgentStatus), TokensUsed has input_tokens/output_tokens, PermissionRequested has tool_name/tool_input/request_id",
+        "Create src-tauri/src/event_bus.rs with EventBus struct wrapping tokio::sync::broadcast::Sender<NormalizedEvent>",
+        "EventBus has publish(event: NormalizedEvent) and subscribe() -> broadcast::Receiver<NormalizedEvent> methods",
+        "EventBus is Clone-friendly (broadcast::Sender is Clone) for passing to multiple producers",
+        "Add NormalizedEvent and EventSource types to src/types.ts matching the Rust definitions",
+        "cargo check passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Create OTEL HTTP/protobuf ingestion server",
+      "description": "As a developer, I need an OTLP/HTTP server on localhost:4318 that accepts protobuf-encoded trace exports so AI agents can push telemetry directly.",
+      "acceptanceCriteria": [
+        "Add dependencies to Cargo.toml: opentelemetry-proto (with 'gen-tonic' or appropriate feature for trace types), prost, axum, tower-http",
+        "Create src-tauri/src/otel_server.rs with an async start() function that binds axum to 127.0.0.1:4318",
+        "Implement POST /v1/traces handler that accepts Content-Type application/x-protobuf",
+        "Decode request body as opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest using prost::Message::decode",
+        "Log received spans at debug level (span name, service.name, trace_id) for development visibility",
+        "Return ExportTraceServiceResponse (empty, 200 OK) on success, 400 on decode failure",
+        "Start OTEL server as a tokio task in lib.rs setup block, alongside existing hook server",
+        "Server gracefully handles port-already-in-use (log warning, skip OTEL server, app still works)",
+        "cargo check passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Map OTEL spans to NormalizedEvent and wire EventBus",
+      "description": "As a developer, I want incoming OTEL spans mapped to NormalizedEvent and published to the EventBus, with a Tauri event bridge so the frontend receives them.",
+      "acceptanceCriteria": [
+        "Create span-to-event mapping in otel_server.rs: extract agent_type from service.name or resource attributes, session_id from span attributes, tool_name from span name/attributes",
+        "Map span names containing 'tool' or 'function_call' to ToolStarted/ToolCompleted based on span status",
+        "Map session lifecycle spans to SessionStarted/SessionEnded",
+        "Map token/usage spans to TokensUsed (extract input_tokens/output_tokens from attributes)",
+        "Unknown/unmapped span types logged at debug level and skipped (no crash or error)",
+        "OTEL server takes EventBus reference and publishes mapped NormalizedEvent for each span",
+        "Create EventBus Tauri bridge: spawn a tokio task that subscribes to EventBus and emits 'event-bus:normalized-event' Tauri event for each NormalizedEvent",
+        "EventBus initialized in lib.rs setup, passed to OTEL server and bridge task",
+        "cargo check passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Integrate hook server with EventBus",
+      "description": "As a developer, I want the existing hook server to publish NormalizedEvent to the EventBus so hooks and OTEL events flow through the same pipeline.",
+      "acceptanceCriteria": [
+        "HookServer::start() takes an EventBus parameter in addition to AppHandle",
+        "Non-permission hook events (PreToolUse, PostToolUse, UserPromptSubmit, Stop, etc.) publish corresponding NormalizedEvent to the EventBus",
+        "PreToolUse maps to ToolStarted, PostToolUse to ToolCompleted, Stop/SubagentStop/SessionEnd to SessionEnded, SessionStart to SessionStarted, UserPromptSubmit to StatusChanged(Operating)",
+        "Existing Tauri event emissions (hook:status-update, hook:permission-request, hook:permission-cancelled) remain unchanged for backwards compatibility",
+        "PermissionRequest events still use the existing direct Tauri event path (not EventBus) since they require the blocking approval round-trip",
+        "Update lib.rs to pass EventBus to HookServer::start()",
+        "cargo check passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Add frontend event bus consumer with OTEL status merging",
+      "description": "As a user, I want sessions that report via OTEL to show real-time status in the notchai UI, with OTEL and hook events taking priority over polled status.",
+      "acceptanceCriteria": [
+        "Create src/hooks/useEventBus.ts that listens for 'event-bus:normalized-event' Tauri events",
+        "Maintains Map<sessionId, { status: AgentStatus, timestamp: number, source: EventSource }> for latest event per session",
+        "Maps NormalizedEvent variants to AgentStatus: ToolStarted/StatusChanged(Operating) -> operating, SessionEnded/TaskCompleted -> completed, ToolCompleted -> operating (still working)",
+        "Export mergeEventBusStatus() function that applies event-bus-sourced status when event is < 30 seconds old (same TTL as existing hook merge)",
+        "Integrate into useAgentMonitor.ts: call mergeEventBusStatus() after existing mergeHookStatus(), so priority is event-bus > hooks > poll",
+        "Falls back gracefully when no event-bus events received (existing behavior unchanged)",
+        "npx tsc --noEmit passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Create Codex notify relay script",
+      "description": "As a developer, I need a lightweight script that Codex's notify command invokes to relay turn-completion data to notchai.",
+      "acceptanceCriteria": [
+        "Create resources/notchai-codex-notify.sh as a bash script",
+        "Script sends a JSON payload to /tmp/notchai.sock with fields: source ('codex'), event_type ('task_complete'), session_id (from CODEX_SESSION_ID env var or 'unknown'), cwd (from pwd), timestamp (ISO 8601)",
+        "Uses socat or python one-liner fallback to write to Unix socket (socat preferred, python3 fallback)",
+        "Exits 0 on any error (fail-open, never blocks Codex)",
+        "Script is executable (chmod 755)",
+        "Add resources/notchai-codex-notify.sh to bundle resources in tauri.conf.json",
+        "cargo check passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Create Codex notify hook installer",
+      "description": "As a user, I want notchai to install a Codex notify command so Codex pushes turn-completion events to notchai in near-real-time.",
+      "acceptanceCriteria": [
+        "Add install_codex_hooks() and uninstall_codex_hooks() functions to hook_installer.rs (or new codex_hook_installer.rs)",
+        "Reads ~/.codex/config.yaml (or config.toml), adds notify.command entry pointing to bundled notchai-codex-notify.sh",
+        "Installation is idempotent — checks for 'notchai' marker in existing notify config before adding",
+        "Uninstall removes the notify entry cleanly without affecting other config keys",
+        "install_codex_hooks_if_enabled() checks ~/.notchai/config.json for codex_hooks_enabled flag (default true)",
+        "Hook server extended to recognize messages with source='codex' and publish NormalizedEvent::TaskCompleted or StatusChanged to EventBus",
+        "Wire install into lib.rs setup block alongside Claude hooks",
+        "Add codex_hooks_enabled toggle to existing toggle_hooks_enabled Tauri command (or add separate toggle_codex_hooks_enabled command)",
+        "cargo check passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Add Codex hooks toggle to settings UI",
+      "description": "As a user, I want a toggle in the settings panel to enable/disable Codex notify hooks independently from Claude hooks.",
+      "acceptanceCriteria": [
+        "Add Codex hooks toggle in ExpandedView settings area, alongside existing Claude hooks toggle",
+        "Toggle calls invoke('toggle_codex_hooks_enabled', { enabled }) or the unified toggle command",
+        "Shows current state fetched on mount via Tauri command",
+        "Label clearly indicates 'Codex Hooks' vs existing 'Claude Hooks' toggle",
+        "State persists via ~/.notchai/config.json codex_hooks_enabled flag",
+        "npx tsc --noEmit passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Expand Claude hook event coverage",
+      "description": "As a user, I want notchai to handle additional Claude Code hook events for richer session status and multi-agent awareness.",
+      "acceptanceCriteria": [
+        "Review current Claude Code hook event types and add any new ones not yet registered in hook_installer.rs (e.g., if Claude Code has added new hook event types beyond the current 9)",
+        "hook_server.rs maps Notification events with title/message to NormalizedEvent and triggers macOS notification via Tauri notification API",
+        "hook_server.rs handles unknown/new event types gracefully — logs at debug level and publishes a generic StatusChanged event",
+        "useHookEvents.ts status mapping updated: add handling for any new event types in the hookEventType-to-status switch",
+        "Frontend shows notification content in collapsed view when a Notification event arrives (brief flash of title text)",
+        "npx tsc --noEmit passes",
+        "cargo check passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "Add approval pipeline dedup and TTL",
+      "description": "As a user, I don't want to see duplicate or stale permission requests cluttering the approval UI.",
+      "acceptanceCriteria": [
+        "hook_server.rs deduplicates pending approvals by (session_id, tool_name, tool_use_id) — if an identical request arrives while one is pending, the old oneshot sender is dropped (cancelled) and replaced",
+        "Pending approvals expire after 5 minutes — a tokio::time::sleep branch in the select! macro sends a deny response and removes from pending map",
+        "When a pending approval is cancelled (old deduped or expired), emit hook:permission-cancelled Tauri event so frontend removes it",
+        "Frontend useHookEvents.ts filters pendingApprovals on each update to remove entries older than 5 minutes as a safety net",
+        "Add APPROVAL_TTL_SECS constant (300) to hook_server.rs for configurability",
+        "npx tsc --noEmit passes",
+        "cargo check passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Add incremental reads for Codex and Gemini adapters",
+      "description": "As a developer, I want Codex and Gemini adapters to use incremental file reading instead of reading entire files on each poll cycle.",
+      "acceptanceCriteria": [
+        "Codex adapter tracks byte offsets per session file in a HashMap<String, u64> (similar to TranscriptReader in transcript.rs)",
+        "On first read, Codex adapter reads last 50KB of JSONL file; on subsequent reads, seeks to last known offset",
+        "Gemini adapter tracks file modification time per session in HashMap<String, SystemTime>",
+        "Gemini adapter skips re-parsing files whose mtime has not changed since last poll",
+        "Both adapters accumulate session state (tokens, status, message count) incrementally instead of recomputing from scratch",
+        "No change in output — sessions and tool calls returned are identical to current full-read behavior",
+        "cargo check passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Add parser and adapter unit tests",
+      "description": "As a developer, I want unit tests for transcript parsing, OTEL span mapping, and adapter session extraction to prevent regressions.",
+      "acceptanceCriteria": [
+        "Unit tests for TranscriptReader: normal conversation (2+ messages), tool use + tool result correlation, malformed/truncated JSONL line",
+        "Unit tests for OTEL span-to-NormalizedEvent mapping: valid tool span, session lifecycle span, unknown span type (should not panic)",
+        "Unit tests for Codex adapter JSONL parsing: session_meta entry, event_msg with user_message/agent_message/token_count subtypes",
+        "Unit tests for Gemini adapter JSON parsing: conversation record with messages, tool_calls extraction from assistant message",
+        "Unit test for NormalizedEvent serde serialization round-trip (serialize then deserialize, assert equal)",
+        "All tests pass with cargo test"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}

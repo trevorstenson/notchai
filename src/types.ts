@@ -59,6 +59,86 @@ export interface ToolCallInfo {
   resultPreview: string | null;
 }
 
+export type EventSource = "otel" | "hook" | "notify" | "poll";
+
+export type NormalizedEvent =
+  | {
+      type: "sessionStarted";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+    }
+  | {
+      type: "sessionEnded";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+    }
+  | {
+      type: "toolStarted";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      toolName: string;
+      toolInput: string | null;
+    }
+  | {
+      type: "toolCompleted";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      toolName: string;
+      status: string;
+      durationMs: number | null;
+      resultPreview: string | null;
+    }
+  | {
+      type: "statusChanged";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      newStatus: AgentStatus;
+    }
+  | {
+      type: "tokensUsed";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  | {
+      type: "permissionRequested";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      toolName: string;
+      toolInput: string | null;
+      requestId: string;
+    }
+  | {
+      type: "taskCompleted";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+    }
+  | {
+      type: "error";
+      agentType: AgentType;
+      sessionId: string;
+      timestamp: string;
+      source: EventSource;
+      message: string;
+    };
+
 export const STATUS_COLORS: Record<AgentStatus, string> = {
   operating: "#00FF88",
   idle: "#FFB800",

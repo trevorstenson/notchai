@@ -186,6 +186,89 @@ pub struct TokenUsage {
     pub cache_read_input_tokens: Option<u64>,
 }
 
+// === Unified event pipeline models ===
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum EventSource {
+    Otel,
+    Hook,
+    Notify,
+    Poll,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum NormalizedEvent {
+    SessionStarted {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+    },
+    SessionEnded {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+    },
+    ToolStarted {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        tool_name: String,
+        tool_input: Option<String>,
+    },
+    ToolCompleted {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        tool_name: String,
+        status: String,
+        duration_ms: Option<u64>,
+        result_preview: Option<String>,
+    },
+    StatusChanged {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        new_status: AgentStatus,
+    },
+    TokensUsed {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        input_tokens: u64,
+        output_tokens: u64,
+    },
+    PermissionRequested {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        tool_name: String,
+        tool_input: Option<String>,
+        request_id: String,
+    },
+    TaskCompleted {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+    },
+    Error {
+        agent_type: AgentType,
+        session_id: String,
+        timestamp: String,
+        source: EventSource,
+        message: String,
+    },
+}
+
 // === Gemini CLI session data models ===
 
 #[derive(Debug, Deserialize)]

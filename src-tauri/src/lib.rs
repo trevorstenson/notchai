@@ -1,5 +1,6 @@
 mod adapter;
 mod adapters;
+mod event_bus;
 mod hook_installer;
 mod hook_models;
 mod hook_server;

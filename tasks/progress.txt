@@ -1,0 +1,43 @@
+## Codebase Patterns
+- Claude Code hooks use `hookSpecificOutput` with `hookEventName` for decision control; PermissionRequest uses `decision.behavior` ("allow"/"deny"), PreToolUse uses `permissionDecision`
+- Hook input JSON from Claude Code includes `hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input` (object), `tool_use_id`, `transcript_path`, `permission_mode`
+- PermissionRequest hooks do NOT receive `tool_use_id` (unlike PreToolUse) - must cache from PreToolUse if correlation is needed
+- HookMessage struct in hook_models.rs uses snake_case fields; HookStatusPayload/PermissionRequestPayload use camelCase via serde rename
+- The Tauri app uses `src-tauri/` for Rust backend, `src/` for React frontend, and `@tauri-apps/api` for IPC
+- TypeScript types mirror Rust structs with camelCase field names
+- Quality checks: `npx tsc --noEmit` for TS, `cargo check` for Rust (pre-existing objc macro warnings are expected)
+- Claude Code settings.json hooks format: `{"hooks": {"EventType": [{"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/script.py"}]}]}}`
+- Hook installer uses `NOTCHAI_HOOK_MARKER = "notchai-hook.py"` to identify our entries for idempotent install/uninstall
+- Notchai config lives at `~/.notchai/config.json` with `hooks_enabled` boolean flag (default true)
+- `install_hooks(source_script: &Path)` takes the resolved bundle resource path as input
+- Hook server uses `tokio::sync::Mutex` (not `std::sync::Mutex`) for the pending map since it's held across `.await` points
+- `useAgentMonitor` returns `pendingApprovals` and `respondToApproval` from `useHookEvents` — downstream components should use these for tool approval UI
+- Hook status merging only applies to `claude` agent type sessions; other adapters (codex, cursor, gemini) use polled status only
+- Gemini CLI sessions are JSON files at `~/.gemini/tmp/<project_hash>/session-*.json` (respects `GEMINI_CLI_HOME` env var)
+- New adapters need changes in 7 places: models.rs (AgentType enum + structs), adapters/<name>.rs (new), adapters/mod.rs, lib.rs (register), types.ts (AgentType), NotchArc.tsx (AGENT_TYPE_ORDER), pricing.ts
+- `hook_server::get_server()` returns `Option<&'static HookServer>` for Tauri command access; `respond()` is `async`
+- Socket server `start()` is `pub async fn` — must be spawned as a tokio task from Tauri setup
+- Tauri 2 resource path resolution: `app.path().resolve("resources/notchai-hook.py", tauri::path::BaseDirectory::Resource)`
+- Use `tauri::async_runtime::spawn()` to run async tasks from the synchronous setup block
+- For app exit cleanup: use `.build().run(|_app, event| { ... })` pattern instead of `.run(context)` — allows handling `RunEvent::Exit`
+- Tauri commands: `respond_to_approval` (async), `toggle_hooks_enabled`, `get_hooks_enabled`, `get_session_tool_calls` registered in invoke_handler
+- Claude JSONL tool data lives in two places: `message.content[]` ToolUse blocks (assistant entries) and top-level `tool_result` entries — correlate by `tool_use_id`
+- `AgentAdapter::get_tool_calls()` has default empty impl — only Claude and Gemini override it; Codex/Cursor use default
+- `AgentMonitor::get_tool_calls()` tries each adapter and returns first non-empty result — session IDs are unique across adapters
+- CSS `--island-expanded-height` and Rust `hover_height`/`expanded_height` must stay in sync; hover_height >= CSS height to keep mouse in zone
+- Use `e.stopPropagation()` on nested interactive elements inside clickable session rows to prevent parent click handlers from firing
+
+---
+
+## 2026-03-01 - US-013
+- Implemented NormalizedEvent enum with 9 variants (SessionStarted, SessionEnded, ToolStarted, ToolCompleted, StatusChanged, TokensUsed, PermissionRequested, TaskCompleted, Error) and EventSource enum (Otel, Hook, Notify, Poll) in models.rs
+- Created event_bus.rs with EventBus struct wrapping tokio::sync::broadcast channel (capacity 256), with publish() and subscribe() methods
+- Added matching TypeScript discriminated union types (NormalizedEvent, EventSource) in src/types.ts
+- Wired event_bus module declaration into lib.rs
+- Files changed: src-tauri/src/models.rs, src-tauri/src/event_bus.rs (new), src-tauri/src/lib.rs, src/types.ts
+- **Learnings for future iterations:**
+  - NormalizedEvent uses `#[serde(tag = "type")]` for JSON discriminator — TypeScript union uses `type` field to discriminate
+  - EventBus uses tokio::sync::broadcast (not mpsc) so multiple subscribers can receive all events; publish() ignores errors when no receivers exist
+  - Rust NormalizedEvent variants use struct-style enum fields (not tuple variants) so serde camelCase rename works on individual fields
+  - cargo check must be run from src-tauri/ directory (no workspace-level Cargo.toml)
+---
