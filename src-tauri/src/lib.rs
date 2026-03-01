@@ -7,6 +7,7 @@ mod hook_server;
 mod models;
 mod monitor;
 mod notch;
+mod otel_server;
 mod process;
 mod scanner;
 mod transcript;
@@ -1066,6 +1067,11 @@ pub fn run() {
             let server_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 hook_server::start(server_handle).await;
+            });
+
+            // Spawn the OTEL HTTP/protobuf ingestion server as a tokio task
+            tauri::async_runtime::spawn(async move {
+                otel_server::start().await;
             });
 
             let window = app.get_webview_window("main").unwrap();
