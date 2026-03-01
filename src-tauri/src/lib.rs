@@ -13,9 +13,13 @@ mod util;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::atomic::AtomicU64;
 use std::process::Command;
 use std::path::PathBuf;
 use std::collections::HashSet;
+#[cfg(target_os = "macos")]
+use std::sync::OnceLock;
 #[cfg(target_os = "macos")]
 use std::{thread, time::Duration};
 
@@ -373,12 +377,16 @@ fn get_selected_screen() -> Option<usize> {
 #[tauri::command]
 fn set_selected_screen(
     index: Option<usize>,
-    window: tauri::Window,
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    hook_installer::set_selected_screen(index)?;
-    reposition_window(index, &window, &app, &state);
+    let name = index.and_then(|i| {
+        notch::list_screens()
+            .into_iter()
+            .find(|s| s.index == i)
+            .map(|s| s.name)
+    });
+    hook_installer::set_selected_screen(index, name.as_deref())?;
+    reposition_window(index, &app);
     Ok(())
 }
 
@@ -396,9 +404,7 @@ fn save_settings(
     hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
-    window: tauri::Window,
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     // Handle hooks toggle
     let current_hooks = hook_installer::get_hooks_enabled();
@@ -416,8 +422,14 @@ fn save_settings(
     // Handle screen selection
     let current_screen = hook_installer::get_selected_screen();
     if selected_screen != current_screen {
-        hook_installer::set_selected_screen(selected_screen)?;
-        reposition_window(selected_screen, &window, &app, &state);
+        let name = selected_screen.and_then(|i| {
+            notch::list_screens()
+                .into_iter()
+                .find(|s| s.index == i)
+                .map(|s| s.name)
+        });
+        hook_installer::set_selected_screen(selected_screen, name.as_deref())?;
+        reposition_window(selected_screen, &app);
     }
 
     // Handle sound toggle
@@ -429,10 +441,12 @@ fn save_settings(
 /// Reposition the window on the selected screen and restart the hover monitor.
 fn reposition_window(
     screen_index: Option<usize>,
-    window: &tauri::Window,
     #[allow(unused_variables)] app: &tauri::AppHandle,
-    #[allow(unused_variables)] state: &tauri::State<'_, AppState>,
 ) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
     let detection = notch::detect_notch_on_screen(screen_index);
     let notch = &detection.info;
     let hover_width = (notch.width + 340.0).max(540.0);
@@ -448,6 +462,7 @@ fn reposition_window(
 
     #[cfg(target_os = "macos")]
     {
+        let state = app.state::<AppState>();
         // Stop the old hover monitor thread and swap in a new flag
         let new_flag = Arc::new(AtomicBool::new(false));
         {
@@ -1025,6 +1040,100 @@ fn current_mouse_position_from_top_left(screen_top_macos_y: f64) -> Option<(f64,
     }
 }
 
+/// Global AppHandle so the ObjC notification callback can access it.
+#[cfg(target_os = "macos")]
+static SCREEN_CHANGE_APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Debounce: skip display change events that arrive within 500ms of the last handled one.
+#[cfg(target_os = "macos")]
+static LAST_SCREEN_CHANGE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Register an observer for NSApplicationDidChangeScreenParametersNotification.
+/// When monitors are connected/disconnected/rearranged, macOS fires this notification
+/// and we automatically reposition the window.
+#[cfg(target_os = "macos")]
+fn register_screen_change_observer(app_handle: tauri::AppHandle) {
+    use objc::declare::ClassDecl;
+    use objc::runtime::{Class, Object, Sel};
+    use objc::{msg_send, sel, sel_impl};
+
+    SCREEN_CHANGE_APP_HANDLE.set(app_handle).ok();
+
+    extern "C" fn screen_did_change(_this: &Object, _cmd: Sel, _notification: *mut Object) {
+        if let Some(app) = SCREEN_CHANGE_APP_HANDLE.get() {
+            handle_screen_configuration_change(app);
+        }
+    }
+
+    unsafe {
+        let superclass = Class::get("NSObject").expect("NSObject class not found");
+        let mut decl = ClassDecl::new("NotchaiScreenObserver", superclass)
+            .expect("Failed to declare NotchaiScreenObserver class");
+
+        decl.add_method(
+            sel!(screenDidChange:),
+            screen_did_change as extern "C" fn(&Object, Sel, *mut Object),
+        );
+
+        let observer_class = decl.register();
+
+        let observer: *mut Object = msg_send![observer_class, alloc];
+        let observer: *mut Object = msg_send![observer, init];
+
+        let ns_string_class = Class::get("NSString").expect("NSString class not found");
+        let notif_name_cstr = std::ffi::CString::new(
+            "NSApplicationDidChangeScreenParametersNotification"
+        ).unwrap();
+        let notif_name: *mut Object = msg_send![
+            ns_string_class,
+            stringWithUTF8String: notif_name_cstr.as_ptr()
+        ];
+
+        let nc_class = Class::get("NSNotificationCenter").expect("NSNotificationCenter not found");
+        let center: *mut Object = msg_send![nc_class, defaultCenter];
+
+        let _: () = msg_send![center,
+            addObserver: observer
+            selector: sel!(screenDidChange:)
+            name: notif_name
+            object: std::ptr::null::<Object>()
+        ];
+
+        // Observer must live for the app lifetime — intentionally leak it.
+        std::mem::forget(observer);
+    }
+}
+
+/// Called when macOS fires a display configuration change notification.
+/// Re-resolves the saved screen by name and repositions the window.
+#[cfg(target_os = "macos")]
+fn handle_screen_configuration_change(app: &tauri::AppHandle) {
+    // Debounce: macOS can fire multiple notifications in quick succession
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let last = LAST_SCREEN_CHANGE_MS.load(Ordering::SeqCst);
+    if now_ms.saturating_sub(last) < 500 {
+        return;
+    }
+    LAST_SCREEN_CHANGE_MS.store(now_ms, Ordering::SeqCst);
+
+    let saved_index = hook_installer::get_selected_screen();
+    let saved_name = hook_installer::get_selected_screen_name();
+    let resolved_index = notch::resolve_screen_index(saved_index, saved_name.as_deref());
+
+    // Persist the resolved index so get_settings() returns the correct value
+    if resolved_index != saved_index {
+        let _ = hook_installer::set_selected_screen(resolved_index, saved_name.as_deref());
+    }
+
+    reposition_window(resolved_index, app);
+
+    // Tell the frontend so SettingsView can refresh its screen list
+    let _ = app.emit("screens-changed", ());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let shortcut_plugin = tauri_plugin_global_shortcut::Builder::default()
@@ -1070,8 +1179,10 @@ pub fn run() {
             let window = app.get_webview_window("main").unwrap();
 
             // Detect notch and position an invisible hover zone over it.
-            // Respects saved screen selection; auto-detects if none is set.
-            let selected_screen = hook_installer::get_selected_screen();
+            // Respects saved screen selection; resolves by name first (indexes can shift).
+            let saved_index = hook_installer::get_selected_screen();
+            let saved_name = hook_installer::get_selected_screen_name();
+            let selected_screen = notch::resolve_screen_index(saved_index, saved_name.as_deref());
             let detection = notch::detect_notch_on_screen(selected_screen);
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
@@ -1126,6 +1237,10 @@ pub fn run() {
 
             // Make visible on all workspaces
             window.set_visible_on_all_workspaces(true).ok();
+
+            // Listen for monitor connect/disconnect events to auto-reposition
+            #[cfg(target_os = "macos")]
+            register_screen_change_observer(app.handle().clone());
 
             window.show().ok();
 
