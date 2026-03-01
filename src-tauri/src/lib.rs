@@ -18,7 +18,7 @@ use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::{thread, time::Duration};
 
-use models::{AgentSession, NotchInfo};
+use models::{AgentSession, NotchInfo, ToolCallInfo};
 use monitor::AgentMonitor;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -248,6 +248,14 @@ fn toggle_hooks_enabled(enabled: bool) -> Result<(), String> {
 #[tauri::command]
 fn get_hooks_enabled() -> bool {
     hook_installer::get_hooks_enabled()
+}
+
+#[tauri::command]
+fn get_session_tool_calls(
+    session_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Vec<ToolCallInfo> {
+    state.monitor.lock().unwrap().get_tool_calls(&session_id)
 }
 
 #[cfg(target_os = "macos")]
@@ -896,7 +904,8 @@ pub fn run() {
             resume_session,
             respond_to_approval,
             toggle_hooks_enabled,
-            get_hooks_enabled
+            get_hooks_enabled,
+            get_session_tool_calls
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

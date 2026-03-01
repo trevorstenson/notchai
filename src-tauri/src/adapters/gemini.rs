@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::adapter::AgentAdapter;
 use crate::models::{
-    AgentSession, AgentStatus, AgentType, GeminiConversationRecord,
+    AgentSession, AgentStatus, AgentType, GeminiConversationRecord, ToolCallInfo,
 };
 use crate::process::ProcessDetector;
 use crate::util::detect_git_branch;
@@ -197,6 +197,98 @@ impl GeminiAdapter {
         AgentStatus::Idle
     }
 
+    fn find_session_path(&self, session_id: &str) -> Option<PathBuf> {
+        let files = self.scan_session_files();
+        for (path, _) in files {
+            let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+            if stem == session_id {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn parse_tool_calls_from_session(path: &Path) -> Vec<ToolCallInfo> {
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        let record: GeminiConversationRecord = match serde_json::from_str(&content) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
+        let messages = record.messages.unwrap_or_default();
+        let mut calls: Vec<ToolCallInfo> = Vec::new();
+        let mut call_index: u32 = 0;
+
+        for msg in &messages {
+            let msg_type = msg.message_type.as_deref().unwrap_or("");
+            let role = msg.role.as_deref().unwrap_or("");
+
+            if msg_type != "gemini" && role != "assistant" && role != "model" {
+                continue;
+            }
+
+            if let Some(tool_calls) = &msg.tool_calls {
+                for tc in tool_calls {
+                    let name = tc.name.as_deref().unwrap_or("unknown").to_string();
+                    let input_summary = tc
+                        .input
+                        .as_ref()
+                        .map(|v| {
+                            let s = match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Object(map) => {
+                                    let parts: Vec<String> = map
+                                        .iter()
+                                        .take(3)
+                                        .map(|(k, v)| {
+                                            let val = match v {
+                                                serde_json::Value::String(s) => s.clone(),
+                                                _ => v.to_string(),
+                                            };
+                                            format!("{}: {}", k, val)
+                                        })
+                                        .collect();
+                                    parts.join(", ")
+                                }
+                                _ => v.to_string(),
+                            };
+                            if s.len() > 200 {
+                                format!("{}...", &s[..197])
+                            } else {
+                                s
+                            }
+                        })
+                        .unwrap_or_default();
+
+                    calls.push(ToolCallInfo {
+                        id: format!("gemini-tc-{}", call_index),
+                        tool_name: name.clone(),
+                        display_name: name,
+                        input_summary,
+                        status: "success".to_string(),
+                        timestamp: None,
+                        duration_ms: None,
+                        result_preview: None,
+                    });
+
+                    call_index += 1;
+                }
+            }
+        }
+
+        // Return last 20
+        let len = calls.len();
+        if len > 20 {
+            calls.drain(..len - 20);
+        }
+
+        calls
+    }
+
     fn file_modified_rfc3339(path: &Path) -> String {
         fs::metadata(path)
             .ok()
@@ -220,6 +312,13 @@ impl AgentAdapter for GeminiAdapter {
 
     fn name(&self) -> &str {
         "Gemini CLI"
+    }
+
+    fn get_tool_calls(&self, session_id: &str) -> Vec<ToolCallInfo> {
+        match self.find_session_path(session_id) {
+            Some(path) => Self::parse_tool_calls_from_session(&path),
+            None => Vec::new(),
+        }
     }
 
     fn get_sessions(&self) -> Vec<AgentSession> {

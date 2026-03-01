@@ -32,6 +32,19 @@ pub struct PendingToolInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ToolCallInfo {
+    pub id: String,
+    pub tool_name: String,
+    pub display_name: String,
+    pub input_summary: String,
+    pub status: String,
+    pub timestamp: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub result_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentSession {
     pub agent_type: AgentType,
     pub id: String,
@@ -117,9 +130,13 @@ pub struct TranscriptEntry {
     #[serde(rename = "sessionId")]
     #[allow(dead_code)]
     pub session_id: Option<String>,
-    #[allow(dead_code)]
     pub timestamp: Option<String>,
     pub message: Option<TranscriptMessage>,
+    // Fields for top-level tool_result entries
+    pub tool_use_id: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub result: Option<serde_json::Value>,
+    pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -128,6 +145,26 @@ pub struct TranscriptMessage {
     pub role: Option<String>,
     pub model: Option<String>,
     pub usage: Option<TokenUsage>,
+    pub content: Option<Vec<TranscriptContentBlock>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum TranscriptContentBlock {
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: Option<serde_json::Value>,
+        is_error: Option<bool>,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
