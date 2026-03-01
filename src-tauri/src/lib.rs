@@ -2,6 +2,7 @@ mod adapter;
 mod adapters;
 mod hook_installer;
 mod hook_models;
+mod hook_server;
 mod models;
 mod monitor;
 mod notch;
