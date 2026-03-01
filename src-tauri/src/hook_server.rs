@@ -7,9 +7,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{oneshot, Mutex};
 
+use crate::event_bus::EventBus;
 use crate::hook_models::{
     HookMessage, HookStatusPayload, PermissionDecision, PermissionRequestPayload,
 };
+use crate::models::{AgentStatus, AgentType, EventSource, NormalizedEvent};
 
 static HOOK_SERVER: OnceLock<HookServer> = OnceLock::new();
 
@@ -52,7 +54,7 @@ impl HookServer {
 const SOCKET_PATH: &str = "/tmp/notchai.sock";
 
 /// Start the Unix socket server. Should be called once during app setup.
-pub async fn start(app: AppHandle) {
+pub async fn start(app: AppHandle, event_bus: EventBus) {
     // Initialize the global server instance
     let server = HookServer::new();
     let pending = server.pending.clone();
@@ -84,6 +86,7 @@ pub async fn start(app: AppHandle) {
         let app_handle = app.clone();
         let pending = pending.clone();
         let cache = tool_use_id_cache.clone();
+        let bus = event_bus.clone();
 
         tokio::spawn(async move {
             let (reader, mut writer) = tokio::io::split(stream);
@@ -216,19 +219,94 @@ pub async fn start(app: AppHandle) {
                     }
                 }
 
-                // Emit status update for non-permission events
+                // Emit status update for non-permission events (backwards compat)
                 if !session_id.is_empty() {
                     let payload = HookStatusPayload {
                         event_type: msg.event_type.clone(),
-                        session_id,
+                        session_id: session_id.clone(),
                         cwd: msg.cwd.clone(),
                         tool_name: msg.tool_name.clone(),
                         agent: msg.agent.clone(),
-                        timestamp,
+                        timestamp: timestamp.clone(),
                     };
                     let _ = app_handle.emit("hook:status-update", &payload);
                 }
+
+                // Publish NormalizedEvent to the EventBus
+                if !session_id.is_empty() {
+                    if let Some(normalized) = map_hook_to_normalized_event(
+                        &msg.event_type,
+                        &session_id,
+                        &timestamp,
+                        &msg.tool_name,
+                        &msg.tool_input,
+                    ) {
+                        bus.publish(normalized);
+                    }
+                }
             }
         });
+    }
+}
+
+/// Map a Claude Code hook event_type to a NormalizedEvent.
+/// Returns None for event types that don't have a meaningful mapping.
+fn map_hook_to_normalized_event(
+    event_type: &str,
+    session_id: &str,
+    timestamp: &str,
+    tool_name: &Option<String>,
+    tool_input: &Option<String>,
+) -> Option<NormalizedEvent> {
+    let agent_type = AgentType::Claude;
+    let source = EventSource::Hook;
+    let sid = session_id.to_string();
+    let ts = timestamp.to_string();
+
+    match event_type {
+        "PreToolUse" => Some(NormalizedEvent::ToolStarted {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+            tool_name: tool_name.clone().unwrap_or_default(),
+            tool_input: tool_input.clone(),
+        }),
+        "PostToolUse" => Some(NormalizedEvent::ToolCompleted {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+            tool_name: tool_name.clone().unwrap_or_default(),
+            status: "ok".to_string(),
+            duration_ms: None,
+            result_preview: None,
+        }),
+        "Stop" | "SubagentStop" | "SessionEnd" => Some(NormalizedEvent::SessionEnded {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+        }),
+        "SessionStart" => Some(NormalizedEvent::SessionStarted {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+        }),
+        "UserPromptSubmit" => Some(NormalizedEvent::StatusChanged {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
+            new_status: AgentStatus::Operating,
+        }),
+        _ => {
+            eprintln!(
+                "[hook_server] unmapped hook event type '{}' for session {}",
+                event_type, session_id
+            );
+            None
+        }
     }
 }

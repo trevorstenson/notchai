@@ -1063,14 +1063,15 @@ pub fn run() {
                 eprintln!("[hooks] could not resolve notchai-hook.py resource path");
             }
 
-            // Spawn the hook socket server as a tokio task
-            let server_handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                hook_server::start(server_handle).await;
-            });
-
             // Create the event bus for unified event pipeline
             let event_bus = event_bus::EventBus::new();
+
+            // Spawn the hook socket server as a tokio task with EventBus
+            let server_handle = app_handle.clone();
+            let hook_bus = event_bus.clone();
+            tauri::async_runtime::spawn(async move {
+                hook_server::start(server_handle, hook_bus).await;
+            });
 
             // Spawn the OTEL HTTP/protobuf ingestion server with EventBus
             let otel_bus = event_bus.clone();
