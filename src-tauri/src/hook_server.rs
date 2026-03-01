@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use serde_json;
 use tauri::{AppHandle, Emitter};
@@ -15,6 +16,9 @@ use crate::hook_models::{
 };
 use crate::models::{AgentStatus, AgentType, EventSource, NormalizedEvent};
 
+/// Time-to-live for pending approval requests (5 minutes).
+const APPROVAL_TTL_SECS: u64 = 300;
+
 static HOOK_SERVER: OnceLock<HookServer> = OnceLock::new();
 
 /// Returns the global HookServer instance, if started.
@@ -28,6 +32,9 @@ pub struct HookServer {
     /// PermissionRequest events don't include tool_use_id, so we correlate from the
     /// most recent PreToolUse for the same session+tool.
     tool_use_id_cache: Arc<Mutex<HashMap<(String, String), String>>>,
+    /// Dedup map: (session_id, tool_name, tool_use_id) → request_id.
+    /// Used to detect and cancel duplicate pending approvals.
+    dedup_map: Arc<Mutex<HashMap<(String, String, String), String>>>,
 }
 
 impl HookServer {
@@ -35,6 +42,7 @@ impl HookServer {
         Self {
             pending: Arc::new(Mutex::new(HashMap::new())),
             tool_use_id_cache: Arc::new(Mutex::new(HashMap::new())),
+            dedup_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -61,6 +69,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
     let server = HookServer::new();
     let pending = server.pending.clone();
     let tool_use_id_cache = server.tool_use_id_cache.clone();
+    let dedup_map = server.dedup_map.clone();
     let _ = HOOK_SERVER.set(server);
 
     // Remove stale socket file if it exists
@@ -88,6 +97,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
         let app_handle = app.clone();
         let pending = pending.clone();
         let cache = tool_use_id_cache.clone();
+        let dedup = dedup_map.clone();
         let bus = event_bus.clone();
 
         tokio::spawn(async move {
@@ -128,11 +138,31 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
 
                 // Try to get cached tool_use_id from a recent PreToolUse event
                 let tool_name = msg.tool_name.clone().unwrap_or_default();
-                {
+                let tool_use_id = {
                     let cache_lock = cache.lock().await;
-                    let _cached_tool_use_id = cache_lock
+                    cache_lock
                         .get(&(session_id.clone(), tool_name.clone()))
-                        .cloned();
+                        .cloned()
+                        .unwrap_or_default()
+                };
+
+                // Dedup: cancel any existing pending approval with the same
+                // (session_id, tool_name, tool_use_id) composite key.
+                let dedup_key = (session_id.clone(), tool_name.clone(), tool_use_id);
+                {
+                    let mut dedup_lock = dedup.lock().await;
+                    if let Some(old_request_id) = dedup_lock.remove(&dedup_key) {
+                        let mut pending_lock = pending.lock().await;
+                        // Dropping the old sender cancels the oneshot (Err branch in select!)
+                        if let Some(_old_tx) = pending_lock.remove(&old_request_id) {
+                            eprintln!(
+                                "[hook_server] dedup: replacing pending approval {} with {}",
+                                old_request_id, request_id
+                            );
+                            let _ = app_handle.emit("hook:permission-cancelled", &old_request_id);
+                        }
+                    }
+                    dedup_lock.insert(dedup_key.clone(), request_id.clone());
                 }
 
                 let is_question = tool_name == "AskUserQuestion";
@@ -157,9 +187,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                     pending_lock.insert(request_id.clone(), tx);
                 }
 
-                // Race: wait for UI response OR detect hook script disconnect.
-                // If the hook script exits (e.g., user approved in terminal, timeout),
-                // the socket closes and we clean up the stale approval from the frontend.
+                // Race: wait for UI response, detect hook script disconnect, or TTL expiry.
                 let disconnect = async {
                     let mut discard = [0u8; 1];
                     loop {
@@ -171,8 +199,15 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                     }
                 };
 
+                let ttl = tokio::time::sleep(Duration::from_secs(APPROVAL_TTL_SECS));
+
                 tokio::select! {
                     result = rx => {
+                        // Clean up dedup entry on resolution
+                        {
+                            let mut dedup_lock = dedup.lock().await;
+                            dedup_lock.remove(&dedup_key);
+                        }
                         match result {
                             Ok(decision) => {
                                 let mut response = serde_json::json!({
@@ -191,7 +226,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                                 }
                             }
                             Err(_) => {
-                                // Sender was dropped (e.g., server shutting down), fail-open
+                                // Sender was dropped (e.g., dedup replaced it or server shutting down)
                                 eprintln!("[hook_server] permission request {} cancelled", request_id);
                             }
                         }
@@ -203,6 +238,30 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                             let mut pending_lock = pending.lock().await;
                             pending_lock.remove(&request_id);
                         }
+                        {
+                            let mut dedup_lock = dedup.lock().await;
+                            dedup_lock.remove(&dedup_key);
+                        }
+                        let _ = app_handle.emit("hook:permission-cancelled", &request_id);
+                    }
+                    _ = ttl => {
+                        // TTL expired — send deny and clean up
+                        eprintln!("[hook_server] approval TTL expired for {}, auto-denying", request_id);
+                        {
+                            let mut pending_lock = pending.lock().await;
+                            pending_lock.remove(&request_id);
+                        }
+                        {
+                            let mut dedup_lock = dedup.lock().await;
+                            dedup_lock.remove(&dedup_key);
+                        }
+                        // Send deny response to the hook script
+                        let deny_response = serde_json::json!({
+                            "decision": "deny",
+                            "reason": "approval request timed out after 5 minutes"
+                        });
+                        let response_str = deny_response.to_string() + "\n";
+                        let _ = writer.write_all(response_str.as_bytes()).await;
                         let _ = app_handle.emit("hook:permission-cancelled", &request_id);
                     }
                 }

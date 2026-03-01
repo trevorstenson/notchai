@@ -33,6 +33,19 @@ function hookEventToStatus(eventType: string): AgentStatus | null {
 /** Duration (ms) to show notification text in collapsed view before auto-clearing. */
 const NOTIFICATION_DISPLAY_MS = 4000;
 
+/** TTL (ms) for pending approvals — matches backend APPROVAL_TTL_SECS (5 minutes). */
+const APPROVAL_TTL_MS = 5 * 60 * 1000;
+
+/** Filter out pending approvals older than APPROVAL_TTL_MS. */
+function filterStaleApprovals(
+  approvals: PermissionRequestEvent[],
+): PermissionRequestEvent[] {
+  const cutoff = Date.now() - APPROVAL_TTL_MS;
+  return approvals.filter(
+    (a) => new Date(a.timestamp).getTime() > cutoff,
+  );
+}
+
 export function useHookEvents() {
   const [hookStates, setHookStates] = useState<Map<string, HookSessionState>>(
     () => new Map(),
@@ -88,7 +101,9 @@ export function useHookEvents() {
           });
           return next;
         });
-        setPendingApprovals((prev) => [...prev, payload]);
+        setPendingApprovals((prev) =>
+          filterStaleApprovals([...prev, payload]),
+        );
       },
     );
 
@@ -98,7 +113,9 @@ export function useHookEvents() {
       (event) => {
         const cancelledId = event.payload;
         setPendingApprovals((prev) =>
-          prev.filter((p) => p.requestId !== cancelledId),
+          filterStaleApprovals(
+            prev.filter((p) => p.requestId !== cancelledId),
+          ),
         );
         setHookStates((prev) => {
           const next = new Map(prev);
