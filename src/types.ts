@@ -39,6 +39,15 @@ export interface NotchInfo {
   screenHeight: number;
 }
 
+export interface ScreenInfo {
+  index: number;
+  name: string;
+  hasNotch: boolean;
+  width: number;
+  height: number;
+  isPrimary: boolean;
+}
+
 export interface ToolCallInfo {
   id: string;
   toolName: string;

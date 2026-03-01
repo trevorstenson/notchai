@@ -3,7 +3,7 @@ use std::sync::{Arc, OnceLock};
 
 use serde_json;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::sync::{oneshot, Mutex};
 
@@ -140,6 +140,7 @@ pub async fn start(app: AppHandle) {
                     agent: msg.agent.clone(),
                     timestamp,
                     is_question,
+                    permission_suggestions: msg.permission_suggestions.clone(),
                 };
 
                 let _ = app_handle.emit("hook:permission-request", &payload);
@@ -151,24 +152,53 @@ pub async fn start(app: AppHandle) {
                     pending_lock.insert(request_id.clone(), tx);
                 }
 
-                // Wait for the response from the UI
-                match rx.await {
-                    Ok(decision) => {
-                        let mut response = serde_json::json!({
-                            "decision": decision.decision,
-                            "reason": decision.reason
-                        });
-                        if let Some(ref updated_input) = decision.updated_input {
-                            response["updated_input"] = serde_json::Value::String(updated_input.clone());
-                        }
-                        let response_str = response.to_string() + "\n";
-                        if let Err(e) = writer.write_all(response_str.as_bytes()).await {
-                            eprintln!("[hook_server] write response error: {}", e);
+                // Race: wait for UI response OR detect hook script disconnect.
+                // If the hook script exits (e.g., user approved in terminal, timeout),
+                // the socket closes and we clean up the stale approval from the frontend.
+                let disconnect = async {
+                    let mut discard = [0u8; 1];
+                    loop {
+                        match buf_reader.read(&mut discard).await {
+                            Ok(0) => break,  // EOF — client disconnected
+                            Err(_) => break, // Error — treat as disconnect
+                            Ok(_) => {}      // Unexpected data, keep reading
                         }
                     }
-                    Err(_) => {
-                        // Sender was dropped (e.g., server shutting down), fail-open
-                        eprintln!("[hook_server] permission request {} cancelled", request_id);
+                };
+
+                tokio::select! {
+                    result = rx => {
+                        match result {
+                            Ok(decision) => {
+                                let mut response = serde_json::json!({
+                                    "decision": decision.decision,
+                                    "reason": decision.reason
+                                });
+                                if let Some(ref updated_input) = decision.updated_input {
+                                    response["updated_input"] = serde_json::Value::String(updated_input.clone());
+                                }
+                                if let Some(ref updated_permissions) = decision.updated_permissions {
+                                    response["updated_permissions"] = serde_json::Value::String(updated_permissions.clone());
+                                }
+                                let response_str = response.to_string() + "\n";
+                                if let Err(e) = writer.write_all(response_str.as_bytes()).await {
+                                    eprintln!("[hook_server] write response error: {}", e);
+                                }
+                            }
+                            Err(_) => {
+                                // Sender was dropped (e.g., server shutting down), fail-open
+                                eprintln!("[hook_server] permission request {} cancelled", request_id);
+                            }
+                        }
+                    }
+                    _ = disconnect => {
+                        // Hook script disconnected — clean up pending approval
+                        eprintln!("[hook_server] hook client disconnected for {}, dismissing approval", request_id);
+                        {
+                            let mut pending_lock = pending.lock().await;
+                            pending_lock.remove(&request_id);
+                        }
+                        let _ = app_handle.emit("hook:permission-cancelled", &request_id);
                     }
                 }
             } else {

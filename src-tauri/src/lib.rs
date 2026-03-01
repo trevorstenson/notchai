@@ -11,15 +11,17 @@ mod scanner;
 mod transcript;
 mod util;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::process::Command;
 use std::path::PathBuf;
 use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::{thread, time::Duration};
 
-use models::{AgentSession, NotchInfo, ToolCallInfo};
+use models::{AgentSession, NotchInfo, ScreenInfo, ToolCallInfo};
 use monitor::AgentMonitor;
+use serde::Serialize;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
 use crate::hook_models::PermissionDecision;
@@ -37,6 +39,17 @@ const GENERIC_TERMINAL_APPS: &[&str] = &[
 
 struct AppState {
     monitor: Mutex<AgentMonitor>,
+    /// Current hover monitor stop flag. Protected by a Mutex so we can swap it
+    /// when repositioning.
+    hover_stop_flag: Mutex<Arc<AtomicBool>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsPayload {
+    hooks_enabled: bool,
+    selected_screen: Option<usize>,
+    sound_enabled: bool,
 }
 
 #[tauri::command]
@@ -213,6 +226,7 @@ async fn respond_to_approval(
     decision: String,
     reason: Option<String>,
     updated_input: Option<String>,
+    updated_permissions: Option<String>,
 ) -> Result<(), String> {
     let server = hook_server::get_server().ok_or("Hook server not running")?;
     server
@@ -222,6 +236,7 @@ async fn respond_to_approval(
                 decision,
                 reason,
                 updated_input,
+                updated_permissions,
             },
         )
         .await
@@ -270,6 +285,187 @@ fn get_session_tool_calls(
     state: tauri::State<'_, AppState>,
 ) -> Vec<ToolCallInfo> {
     state.monitor.lock().unwrap().get_tool_calls(&session_id)
+}
+
+#[tauri::command]
+fn play_sound(name: String) {
+    #[cfg(target_os = "macos")]
+    {
+        use objc::runtime::{Class, Object, BOOL};
+        use objc::{msg_send, sel, sel_impl};
+
+        unsafe {
+            let ns_sound_class = match Class::get("NSSound") {
+                Some(c) => c,
+                None => return,
+            };
+
+            // Convert Rust string to NSString
+            let ns_string_class = match Class::get("NSString") {
+                Some(c) => c,
+                None => return,
+            };
+            let c_name = std::ffi::CString::new(name.as_str()).unwrap_or_default();
+            let ns_name: *mut Object = msg_send![ns_string_class,
+                stringWithUTF8String: c_name.as_ptr()];
+            if ns_name.is_null() {
+                return;
+            }
+
+            let sound: *mut Object = msg_send![ns_sound_class, soundNamed: ns_name];
+            if sound.is_null() {
+                return;
+            }
+
+            let _: BOOL = msg_send![sound, play];
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = name;
+    }
+}
+
+#[tauri::command]
+fn play_haptic() {
+    #[cfg(target_os = "macos")]
+    {
+        use objc::runtime::{Class, Object};
+        use objc::{msg_send, sel, sel_impl};
+
+        unsafe {
+            let manager_class = match Class::get("NSHapticFeedbackManager") {
+                Some(c) => c,
+                None => return,
+            };
+
+            let performer: *mut Object = msg_send![manager_class, defaultPerformer];
+            if performer.is_null() {
+                return;
+            }
+
+            // NSHapticFeedbackPattern.Generic = 0, NSHapticFeedbackPerformanceTime.Default = 0
+            let pattern: usize = 0;
+            let performance_time: usize = 0;
+            let _: () = msg_send![performer,
+                performFeedbackPattern: pattern
+                performanceTime: performance_time];
+        }
+    }
+}
+
+#[tauri::command]
+fn get_sound_enabled() -> bool {
+    hook_installer::get_sound_enabled()
+}
+
+#[tauri::command]
+fn list_screens() -> Vec<ScreenInfo> {
+    notch::list_screens()
+}
+
+#[tauri::command]
+fn get_selected_screen() -> Option<usize> {
+    hook_installer::get_selected_screen()
+}
+
+#[tauri::command]
+fn set_selected_screen(
+    index: Option<usize>,
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    hook_installer::set_selected_screen(index)?;
+    reposition_window(index, &window, &app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_settings() -> SettingsPayload {
+    SettingsPayload {
+        hooks_enabled: hook_installer::get_hooks_enabled(),
+        selected_screen: hook_installer::get_selected_screen(),
+        sound_enabled: hook_installer::get_sound_enabled(),
+    }
+}
+
+#[tauri::command]
+fn save_settings(
+    hooks_enabled: bool,
+    selected_screen: Option<usize>,
+    sound_enabled: bool,
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    // Handle hooks toggle
+    let current_hooks = hook_installer::get_hooks_enabled();
+    if hooks_enabled != current_hooks {
+        if hooks_enabled {
+            let resource_path = resolve_hook_script(&app)
+                .ok_or("Cannot find notchai-hook.py in app bundle or project resources")?;
+            hook_installer::install_hooks(&resource_path)?;
+        } else {
+            hook_installer::uninstall_hooks()?;
+        }
+        hook_installer::set_hooks_enabled(hooks_enabled)?;
+    }
+
+    // Handle screen selection
+    let current_screen = hook_installer::get_selected_screen();
+    if selected_screen != current_screen {
+        hook_installer::set_selected_screen(selected_screen)?;
+        reposition_window(selected_screen, &window, &app, &state);
+    }
+
+    // Handle sound toggle
+    hook_installer::set_sound_enabled(sound_enabled)?;
+
+    Ok(())
+}
+
+/// Reposition the window on the selected screen and restart the hover monitor.
+fn reposition_window(
+    screen_index: Option<usize>,
+    window: &tauri::Window,
+    #[allow(unused_variables)] app: &tauri::AppHandle,
+    #[allow(unused_variables)] state: &tauri::State<'_, AppState>,
+) {
+    let detection = notch::detect_notch_on_screen(screen_index);
+    let notch = &detection.info;
+    let hover_width = (notch.width + 340.0).max(540.0);
+    let hover_height = 420.0;
+    let x = notch.center_x() - hover_width / 2.0;
+
+    window
+        .set_position(tauri::LogicalPosition::new(x, notch.y))
+        .ok();
+    window
+        .set_size(tauri::LogicalSize::new(hover_width, hover_height))
+        .ok();
+
+    #[cfg(target_os = "macos")]
+    {
+        // Stop the old hover monitor thread and swap in a new flag
+        let new_flag = Arc::new(AtomicBool::new(false));
+        {
+            let mut flag_guard = state.hover_stop_flag.lock().unwrap();
+            flag_guard.store(true, Ordering::SeqCst);
+            *flag_guard = new_flag.clone();
+        }
+
+        start_global_hover_monitor_with_flag(
+            app.clone(),
+            notch.center_x(),
+            hover_width,
+            24.0,
+            420.0,
+            detection.screen_top_macos_y,
+            new_flag,
+        );
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -747,19 +943,42 @@ fn start_global_hover_monitor(
     hover_height: f64,
     expanded_height: f64,
     screen_top_macos_y: f64,
+    stop_flag: Arc<AtomicBool>,
+) {
+    start_global_hover_monitor_with_flag(
+        app,
+        center_x,
+        hover_width,
+        hover_height,
+        expanded_height,
+        screen_top_macos_y,
+        stop_flag,
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn start_global_hover_monitor_with_flag(
+    app: tauri::AppHandle,
+    center_x: f64,
+    hover_width: f64,
+    hover_height: f64,
+    expanded_height: f64,
+    screen_top_macos_y: f64,
+    stop_flag: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
         let mut was_inside = false;
 
         loop {
+            if stop_flag.load(Ordering::SeqCst) {
+                return;
+            }
+
             if let Some((mouse_x, mouse_y_from_top)) =
                 current_mouse_position_from_top_left(screen_top_macos_y)
             {
                 let left = center_x - hover_width / 2.0;
                 let right = left + hover_width;
-                // Hysteresis:
-                // - use small top strip for initial open trigger
-                // - once open, keep panel open across full expanded height so clicks work
                 let active_height = if was_inside {
                     expanded_height
                 } else {
@@ -780,7 +999,7 @@ fn start_global_hover_monitor(
                 }
             }
 
-            thread::sleep(Duration::from_millis(16));
+            thread::sleep(Duration::from_millis(8));
         }
     });
 }
@@ -829,6 +1048,7 @@ pub fn run() {
                 Box::new(adapters::cursor::CursorAdapter::new()),
                 Box::new(adapters::gemini::GeminiAdapter::new()),
             ])),
+            hover_stop_flag: Mutex::new(Arc::new(AtomicBool::new(false))),
         })
         .setup(|app| {
             // Install hooks if enabled and spawn the socket server
@@ -850,11 +1070,9 @@ pub fn run() {
             let window = app.get_webview_window("main").unwrap();
 
             // Detect notch and position an invisible hover zone over it.
-            // The zone is larger than the notch so the mouse can be
-            // detected approaching from the sides or below.
-            // Iterates all screens to find the one with a physical notch,
-            // so this works even when an external monitor is primary.
-            let detection = notch::detect_notch();
+            // Respects saved screen selection; auto-detects if none is set.
+            let selected_screen = hook_installer::get_selected_screen();
+            let detection = notch::detect_notch_on_screen(selected_screen);
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.
@@ -871,6 +1089,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 // Global hover monitor so open/close works even when another app is focused.
+                let stop_flag = app.state::<AppState>().hover_stop_flag.lock().unwrap().clone();
                 start_global_hover_monitor(
                     app.handle().clone(),
                     notch.center_x(),
@@ -878,6 +1097,7 @@ pub fn run() {
                     24.0,
                     420.0,
                     detection.screen_top_macos_y,
+                    stop_flag,
                 );
             }
 
@@ -919,7 +1139,15 @@ pub fn run() {
             respond_to_approval,
             toggle_hooks_enabled,
             get_hooks_enabled,
-            get_session_tool_calls
+            get_session_tool_calls,
+            play_sound,
+            play_haptic,
+            get_sound_enabled,
+            list_screens,
+            get_selected_screen,
+            set_selected_screen,
+            get_settings,
+            save_settings
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

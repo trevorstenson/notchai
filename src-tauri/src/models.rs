@@ -97,6 +97,17 @@ impl NotchInfo {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenInfo {
+    pub index: usize,
+    pub name: String,
+    pub has_notch: bool,
+    pub width: f64,
+    pub height: f64,
+    pub is_primary: bool,
+}
+
 // === Models for parsing on-disk data ===
 
 #[derive(Debug, Deserialize)]

@@ -526,21 +526,25 @@ body {
 
 .tool-approval-headline {
   font-size: 11px;
-  font-family: var(--font-mono);
   color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .tool-approval-detail {
   font-size: 10px;
   font-family: var(--font-mono);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  padding: 4px 6px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+  max-height: 120px;
   line-height: 1.3;
 }
 
@@ -596,6 +600,12 @@ body {
   background: rgba(255, 68, 68, 0.15);
   color: #FF4444;
   border-color: rgba(255, 68, 68, 0.3);
+}
+
+.tool-approval-btn--always {
+  background: rgba(255, 140, 0, 0.15);
+  color: #FF8C00;
+  border: 1px solid rgba(255, 140, 0, 0.3);
 }
 
 /* === Question Card === */
@@ -906,4 +916,254 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   padding-left: 18px;
+}
+
+/* === Settings Gear Button === */
+.settings-gear-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-tertiary);
+  font-size: 13px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.settings-gear-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--color-text-secondary);
+}
+
+/* === Settings View === */
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-back-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+
+.settings-back-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.settings-back-arrow {
+  line-height: 1;
+  margin-top: -1px;
+}
+
+.settings-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.settings-body::-webkit-scrollbar {
+  width: 3px;
+}
+
+.settings-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.settings-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* === Screen List === */
+.settings-screen-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-screen-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text);
+  transition: background 0.12s ease, border-color 0.12s ease;
+  width: 100%;
+}
+
+.settings-screen-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.settings-screen-item--selected {
+  background: rgba(0, 255, 136, 0.06);
+  border-color: rgba(0, 255, 136, 0.25);
+}
+
+.settings-screen-item--selected:hover {
+  background: rgba(0, 255, 136, 0.1);
+}
+
+.settings-screen-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-screen-badge {
+  font-size: 9px;
+  font-weight: 500;
+  color: rgba(0, 255, 136, 0.85);
+  background: rgba(0, 255, 136, 0.12);
+  padding: 1px 5px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.settings-screen-detail {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.settings-screen-check {
+  font-size: 12px;
+  color: var(--color-operating);
+  flex-shrink: 0;
+}
+
+/* === Settings Toggle === */
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.settings-toggle-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.settings-toggle-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.settings-toggle {
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.15);
+  position: relative;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+
+.settings-toggle--on {
+  background: var(--color-operating);
+}
+
+.settings-toggle-knob {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+}
+
+.settings-toggle--on .settings-toggle-knob {
+  transform: translateX(14px);
+}
+
+/* === Context Menu === */
+.context-menu {
+  position: fixed;
+  background: rgba(30, 30, 34, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 120px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+}
+
+.context-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.context-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
 }

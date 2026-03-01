@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   isPermissionGranted,
   requestPermission,
@@ -63,6 +64,17 @@ export function useSessionNotifications(sessions: AgentSession[]) {
   }, [sessions]);
 }
 
+function playFeedback(soundName: string) {
+  invoke<boolean>("get_sound_enabled")
+    .then((enabled) => {
+      if (enabled) {
+        invoke("play_sound", { name: soundName }).catch(() => {});
+        invoke("play_haptic").catch(() => {});
+      }
+    })
+    .catch(() => {});
+}
+
 function fireNotification(session: AgentSession) {
   const projectLabel =
     session.projectName && session.projectName !== "unknown"
@@ -77,6 +89,7 @@ function fireNotification(session: AgentSession) {
         session.firstPrompt ||
         "Agent is waiting for your response.",
     });
+    playFeedback("Purr");
   } else if (session.status === "completed") {
     sendNotification({
       title: `${projectLabel} completed`,
@@ -85,5 +98,6 @@ function fireNotification(session: AgentSession) {
         session.firstPrompt ||
         "Agent session has finished.",
     });
+    playFeedback("Pop");
   }
 }

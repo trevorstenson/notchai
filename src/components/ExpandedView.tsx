@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { StatusDot } from "./StatusDot";
 import { ToolCallFeed } from "./ToolCallFeed";
@@ -9,6 +9,7 @@ import type { AgentSession } from "../types";
 interface ExpandedViewProps {
   sessions: AgentSession[];
   onSessionOpened?: () => void;
+  onOpenSettings?: () => void;
 }
 
 const RECENT_COMPLETED_WINDOW_MS = 60 * 60 * 1000;
@@ -50,28 +51,13 @@ function statusRank(status: AgentSession["status"]): number {
   }
 }
 
-export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
+export function ExpandedView({ sessions, onSessionOpened, onOpenSettings }: ExpandedViewProps) {
   const [showAllDebug, setShowAllDebug] = useState(false);
   const [openingSessionId, setOpeningSessionId] = useState<string | null>(null);
   const [feedbackBySession, setFeedbackBySession] = useState<
     Record<string, "opened" | "error">
   >({});
-  const [hooksEnabled, setHooksEnabled] = useState(true);
   const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
-
-  useEffect(() => {
-    invoke<boolean>("get_hooks_enabled").then(setHooksEnabled).catch(console.error);
-  }, []);
-
-  const toggleHooks = async () => {
-    const next = !hooksEnabled;
-    try {
-      await invoke("toggle_hooks_enabled", { enabled: next });
-      setHooksEnabled(next);
-    } catch (err) {
-      console.error("[notchai-ui] toggle_hooks_enabled failed", err);
-    }
-  };
 
   const filteredSessions = useMemo(() => {
     const now = Date.now();
@@ -138,13 +124,6 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
         <div className="expanded-controls">
           <span className="expanded-title">Sessions</span>
           <div className="expanded-controls-right">
-            <button
-              className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
-              onClick={toggleHooks}
-              title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
-            >
-              {hooksEnabled ? "Hooks on" : "Hooks off"}
-            </button>
             {DEBUG_MODE && (
               <button
                 className="expanded-debug-toggle"
@@ -153,6 +132,13 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
                 {showAllDebug ? "Hide debug" : "Show all (debug)"}
               </button>
             )}
+            <button
+              className="settings-gear-btn"
+              onClick={(e) => { e.stopPropagation(); onOpenSettings?.(); }}
+              title="Settings"
+            >
+              &#9881;
+            </button>
           </div>
         </div>
         <div className="expanded-empty">No visible sessions</div>
@@ -168,13 +154,6 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
           {!showAllDebug && hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""}
         </span>
         <div className="expanded-controls-right">
-          <button
-            className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
-            onClick={toggleHooks}
-            title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
-          >
-            {hooksEnabled ? "Hooks on" : "Hooks off"}
-          </button>
           {DEBUG_MODE && (
             <button
               className="expanded-debug-toggle"
@@ -183,6 +162,13 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
               {showAllDebug ? "Hide debug" : "Show all (debug)"}
             </button>
           )}
+          <button
+            className="settings-gear-btn"
+            onClick={(e) => { e.stopPropagation(); onOpenSettings?.(); }}
+            title="Settings"
+          >
+            &#9881;
+          </button>
         </div>
       </div>
       <div className="expanded-divider" />
