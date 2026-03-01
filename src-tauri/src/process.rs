@@ -23,10 +23,7 @@ impl ProcessDetector {
 
         for line in stdout.lines() {
             let line = line.trim();
-            if (line.contains("/claude") || line.contains("claude "))
-                && !line.contains("grep")
-                && !line.contains("lome")
-            {
+            if (line.contains("/claude") || line.contains("claude ")) && !line.contains("grep") {
                 if let Some(pid_str) = line.split_whitespace().next() {
                     if let Ok(pid) = pid_str.parse::<u32>() {
                         pids.push(pid);
