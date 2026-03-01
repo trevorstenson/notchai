@@ -1,8 +1,14 @@
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::adapter::AgentAdapter;
-use crate::models::{AgentSession, AgentStatus, AgentType, SessionIndexEntry};
+use crate::models::{
+    AgentSession, AgentStatus, AgentType, SessionIndexEntry, ToolCallInfo,
+    TranscriptContentBlock, TranscriptEntry,
+};
 use crate::process::ProcessDetector;
 use crate::scanner::SessionIndexScanner;
 use crate::transcript::TranscriptReader;
@@ -78,6 +84,216 @@ impl ClaudeAdapter {
         let decoded = format!("/{}", trimmed.replace('-', "/"));
         Some(decoded)
     }
+
+    fn find_session_path(&self, session_id: &str) -> Option<String> {
+        let entries = self.scanner.scan_all_projects();
+        entries
+            .into_iter()
+            .find(|e| e.session_id == session_id)
+            .map(|e| e.full_path)
+    }
+
+    fn summarize_input(input: &serde_json::Value) -> String {
+        let s = match input {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Object(map) => {
+                let parts: Vec<String> = map
+                    .iter()
+                    .take(3)
+                    .map(|(k, v)| {
+                        let val = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            _ => v.to_string(),
+                        };
+                        format!("{}: {}", k, val)
+                    })
+                    .collect();
+                parts.join(", ")
+            }
+            _ => input.to_string(),
+        };
+        if s.len() > 200 {
+            format!("{}...", &s[..197])
+        } else {
+            s
+        }
+    }
+
+    fn summarize_result(result: &serde_json::Value) -> String {
+        let s = match result {
+            serde_json::Value::String(s) => s.clone(),
+            _ => result.to_string(),
+        };
+        if s.len() > 200 {
+            format!("{}...", &s[..197])
+        } else {
+            s
+        }
+    }
+
+    fn tool_display_name(name: &str) -> String {
+        name.to_string()
+    }
+
+    fn parse_tool_calls_from_jsonl(file_path: &str) -> Vec<ToolCallInfo> {
+        let path = Path::new(file_path);
+        if !path.exists() {
+            return Vec::new();
+        }
+
+        let file = match File::open(path) {
+            Ok(f) => f,
+            Err(_) => return Vec::new(),
+        };
+
+        let file_size = match file.metadata() {
+            Ok(m) => m.len(),
+            Err(_) => return Vec::new(),
+        };
+
+        // Read last 200KB for tool call extraction
+        let max_bytes: u64 = 200_000;
+        let read_from = if file_size > max_bytes {
+            file_size - max_bytes
+        } else {
+            0
+        };
+
+        let mut reader = BufReader::new(file);
+        if reader.seek(SeekFrom::Start(read_from)).is_err() {
+            return Vec::new();
+        }
+
+        // Skip partial first line if we seeked to middle
+        let mut line = String::new();
+        if read_from > 0 {
+            let _ = reader.read_line(&mut line);
+            line.clear();
+        }
+
+        // Collect tool_use and tool_result data
+        struct ToolUseData {
+            id: String,
+            name: String,
+            input_summary: String,
+            timestamp: Option<String>,
+        }
+
+        struct ToolResultData {
+            #[allow(dead_code)]
+            tool_use_id: String,
+            is_error: bool,
+            result_preview: Option<String>,
+            duration_ms: Option<u64>,
+        }
+
+        let mut tool_uses: Vec<ToolUseData> = Vec::new();
+        let mut tool_results: HashMap<String, ToolResultData> = HashMap::new();
+
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                line.clear();
+                continue;
+            }
+
+            if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(trimmed) {
+                let timestamp = entry.timestamp.clone();
+
+                // Check for top-level tool_result entries
+                if entry.entry_type.as_deref() == Some("tool_result") {
+                    if let Some(tool_use_id) = entry.tool_use_id {
+                        let result_preview = entry.result.as_ref().map(Self::summarize_result);
+                        tool_results.insert(
+                            tool_use_id.clone(),
+                            ToolResultData {
+                                tool_use_id,
+                                is_error: entry.is_error.unwrap_or(false),
+                                result_preview,
+                                duration_ms: entry.duration_ms,
+                            },
+                        );
+                    }
+                }
+
+                // Check for tool_use blocks in assistant message content
+                if let Some(msg) = &entry.message {
+                    if let Some(content) = &msg.content {
+                        for block in content {
+                            match block {
+                                TranscriptContentBlock::ToolUse { id, name, input } => {
+                                    tool_uses.push(ToolUseData {
+                                        id: id.clone(),
+                                        name: name.clone(),
+                                        input_summary: Self::summarize_input(input),
+                                        timestamp: timestamp.clone(),
+                                    });
+                                }
+                                TranscriptContentBlock::ToolResult {
+                                    tool_use_id,
+                                    content,
+                                    is_error,
+                                } => {
+                                    let result_preview =
+                                        content.as_ref().map(Self::summarize_result);
+                                    tool_results.insert(
+                                        tool_use_id.clone(),
+                                        ToolResultData {
+                                            tool_use_id: tool_use_id.clone(),
+                                            is_error: is_error.unwrap_or(false),
+                                            result_preview,
+                                            duration_ms: None,
+                                        },
+                                    );
+                                }
+                                TranscriptContentBlock::Other => {}
+                            }
+                        }
+                    }
+                }
+            }
+
+            line.clear();
+        }
+
+        // Correlate tool_use with tool_result and build ToolCallInfo list
+        let mut calls: Vec<ToolCallInfo> = tool_uses
+            .into_iter()
+            .map(|tu| {
+                let result = tool_results.remove(&tu.id);
+                let (status, duration_ms, result_preview) = match result {
+                    Some(tr) => {
+                        let status = if tr.is_error {
+                            "error".to_string()
+                        } else {
+                            "success".to_string()
+                        };
+                        (status, tr.duration_ms, tr.result_preview)
+                    }
+                    None => ("running".to_string(), None, None),
+                };
+
+                ToolCallInfo {
+                    id: tu.id,
+                    tool_name: tu.name.clone(),
+                    display_name: Self::tool_display_name(&tu.name),
+                    input_summary: tu.input_summary,
+                    status,
+                    timestamp: tu.timestamp,
+                    duration_ms,
+                    result_preview,
+                }
+            })
+            .collect();
+
+        // Return last 20
+        let len = calls.len();
+        if len > 20 {
+            calls.drain(..len - 20);
+        }
+
+        calls
+    }
 }
 
 impl AgentAdapter for ClaudeAdapter {
@@ -87,6 +303,13 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn name(&self) -> &str {
         "Claude CLI"
+    }
+
+    fn get_tool_calls(&self, session_id: &str) -> Vec<ToolCallInfo> {
+        match self.find_session_path(session_id) {
+            Some(path) => Self::parse_tool_calls_from_jsonl(&path),
+            None => Vec::new(),
+        }
     }
 
     fn get_sessions(&self) -> Vec<AgentSession> {

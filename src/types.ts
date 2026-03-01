@@ -1,9 +1,10 @@
-export type AgentType = "claude" | "codex" | "cursor";
+export type AgentType = "claude" | "codex" | "cursor" | "gemini";
 
 export type AgentStatus =
   | "operating"
   | "idle"
   | "waitingForInput"
+  | "waitingForApproval"
   | "error"
   | "completed";
 
@@ -38,10 +39,22 @@ export interface NotchInfo {
   screenHeight: number;
 }
 
+export interface ToolCallInfo {
+  id: string;
+  toolName: string;
+  displayName: string;
+  inputSummary: string;
+  status: string;
+  timestamp: string | null;
+  durationMs: number | null;
+  resultPreview: string | null;
+}
+
 export const STATUS_COLORS: Record<AgentStatus, string> = {
   operating: "#00FF88",
   idle: "#FFB800",
   waitingForInput: "#7B61FF",
+  waitingForApproval: "#FF8C00",
   error: "#FF4444",
   completed: "#555555",
 };
@@ -50,6 +63,7 @@ export const STATUS_LABELS: Record<AgentStatus, string> = {
   operating: "Operating",
   idle: "Idle",
   waitingForInput: "Needs action",
+  waitingForApproval: "Needs approval",
   error: "Error",
   completed: "Done",
 };

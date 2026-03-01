@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { StatusDot } from "./StatusDot";
+import { ToolCallFeed } from "./ToolCallFeed";
 import { STATUS_LABELS } from "../types";
 import { calculateSessionCost, formatCost } from "../lib/pricing";
 import type { AgentSession } from "../types";
@@ -55,6 +56,22 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
   const [feedbackBySession, setFeedbackBySession] = useState<
     Record<string, "opened" | "error">
   >({});
+  const [hooksEnabled, setHooksEnabled] = useState(true);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<boolean>("get_hooks_enabled").then(setHooksEnabled).catch(console.error);
+  }, []);
+
+  const toggleHooks = async () => {
+    const next = !hooksEnabled;
+    try {
+      await invoke("toggle_hooks_enabled", { enabled: next });
+      setHooksEnabled(next);
+    } catch (err) {
+      console.error("[notchai-ui] toggle_hooks_enabled failed", err);
+    }
+  };
 
   const filteredSessions = useMemo(() => {
     const now = Date.now();
@@ -120,14 +137,23 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
       <div className="expanded-content">
         <div className="expanded-controls">
           <span className="expanded-title">Sessions</span>
-          {DEBUG_MODE && (
+          <div className="expanded-controls-right">
             <button
-              className="expanded-debug-toggle"
-              onClick={() => setShowAllDebug((v) => !v)}
+              className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
+              onClick={toggleHooks}
+              title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
             >
-              {showAllDebug ? "Hide debug" : "Show all (debug)"}
+              {hooksEnabled ? "Hooks on" : "Hooks off"}
             </button>
-          )}
+            {DEBUG_MODE && (
+              <button
+                className="expanded-debug-toggle"
+                onClick={() => setShowAllDebug((v) => !v)}
+              >
+                {showAllDebug ? "Hide debug" : "Show all (debug)"}
+              </button>
+            )}
+          </div>
         </div>
         <div className="expanded-empty">No visible sessions</div>
       </div>
@@ -141,14 +167,23 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
           Sessions
           {!showAllDebug && hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""}
         </span>
-        {DEBUG_MODE && (
+        <div className="expanded-controls-right">
           <button
-            className="expanded-debug-toggle"
-            onClick={() => setShowAllDebug((v) => !v)}
+            className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
+            onClick={toggleHooks}
+            title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
           >
-            {showAllDebug ? "Hide debug" : "Show all (debug)"}
+            {hooksEnabled ? "Hooks on" : "Hooks off"}
           </button>
-        )}
+          {DEBUG_MODE && (
+            <button
+              className="expanded-debug-toggle"
+              onClick={() => setShowAllDebug((v) => !v)}
+            >
+              {showAllDebug ? "Hide debug" : "Show all (debug)"}
+            </button>
+          )}
+        </div>
       </div>
       <div className="expanded-divider" />
       <div className="expanded-sessions">
@@ -165,79 +200,93 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
               ? "opening"
               : feedbackBySession[session.id] ?? null;
 
+          const isExpanded = expandedSessionId === session.id;
+
           return (
-            <div
-              key={session.id}
-              className={`session-row ${
-                session.sessionFolderPath || session.projectPath
-                  ? "session-row--clickable"
-                  : ""
-              } ${session.status === "waitingForInput" ? "session-row--waiting" : ""}`}
-              onClick={() => openSessionTerminal(session)}
-              title={
-                session.sessionFolderPath || session.projectPath
-                  ? `Open terminal at ${
-                      session.sessionFolderPath || session.projectPath
-                    }`
-                  : "No project path available"
-              }
-            >
-              <div className="session-row-main">
-                <StatusDot status={session.status} size={8} />
-                <span className="session-name">{displayProject}</span>
-                <span className="session-status">
-                  {STATUS_LABELS[session.status]}
-                </span>
-                {rowFeedback && (
-                  <span className={`session-action-feedback session-action-feedback--${rowFeedback}`}>
-                    {rowFeedback === "opening"
-                      ? "Opening…"
-                      : rowFeedback === "opened"
-                        ? "Opened"
-                        : "Failed"}
+            <div key={session.id} className="session-row-wrapper">
+              <div
+                className={`session-row ${
+                  session.sessionFolderPath || session.projectPath
+                    ? "session-row--clickable"
+                    : ""
+                } ${session.status === "waitingForInput" ? "session-row--waiting" : ""}`}
+                onClick={() => openSessionTerminal(session)}
+                title={
+                  session.sessionFolderPath || session.projectPath
+                    ? `Open terminal at ${
+                        session.sessionFolderPath || session.projectPath
+                      }`
+                    : "No project path available"
+                }
+              >
+                <div className="session-row-main">
+                  <StatusDot status={session.status} size={8} />
+                  <span className="session-name">{displayProject}</span>
+                  <span className="session-status">
+                    {STATUS_LABELS[session.status]}
                   </span>
-                )}
-                <span className="session-time">{timeAgo(session.modified)}</span>
-              </div>
-
-              <div className="session-row-meta">
-                {session.agentType && session.agentType !== "claude" && (
-                  <>
-                    <span className="session-meta-item session-meta-agent-type">
-                      {session.agentType}
+                  {rowFeedback && (
+                    <span className={`session-action-feedback session-action-feedback--${rowFeedback}`}>
+                      {rowFeedback === "opening"
+                        ? "Opening…"
+                        : rowFeedback === "opened"
+                          ? "Opened"
+                          : "Failed"}
                     </span>
-                    <span className="session-meta-sep">•</span>
-                  </>
-                )}
-                <span className="session-meta-item session-meta-folder">
-                  folder:{folderLabel}
-                </span>
-                <span className="session-meta-sep">•</span>
-                <span className="session-meta-item">
-                  {session.model ?? "unknown model"}
-                </span>
-                <span className="session-meta-sep">•</span>
-                <span className="session-meta-item">
-                  {session.gitBranch || "no-branch"}
-                </span>
-                <span className="session-meta-sep">•</span>
-                <span
-                  className="session-meta-item session-meta-cost"
-                  title={`in:${formatTokens(session.totalInputTokens)} out:${formatTokens(session.totalOutputTokens)}`}
-                >
-                  {formatCost(
-                    calculateSessionCost(
-                      session.totalInputTokens,
-                      session.totalOutputTokens,
-                      session.model,
-                    )
                   )}
-                </span>
-              </div>
+                  <span className="session-time">{timeAgo(session.modified)}</span>
+                  <button
+                    className={`session-expand-btn ${isExpanded ? "session-expand-btn--open" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExpandedSessionId(isExpanded ? null : session.id);
+                    }}
+                    title={isExpanded ? "Collapse tool calls" : "Show tool calls"}
+                  >
+                    &#9662;
+                  </button>
+                </div>
 
-              <div className="session-row-preview">
-                {session.summary || session.firstPrompt || "No summary yet"}
+                <div className="session-row-meta">
+                  {session.agentType && session.agentType !== "claude" && (
+                    <>
+                      <span className="session-meta-item session-meta-agent-type">
+                        {session.agentType}
+                      </span>
+                      <span className="session-meta-sep">•</span>
+                    </>
+                  )}
+                  <span className="session-meta-item session-meta-folder">
+                    folder:{folderLabel}
+                  </span>
+                  <span className="session-meta-sep">•</span>
+                  <span className="session-meta-item">
+                    {session.model ?? "unknown model"}
+                  </span>
+                  <span className="session-meta-sep">•</span>
+                  <span className="session-meta-item">
+                    {session.gitBranch || "no-branch"}
+                  </span>
+                  <span className="session-meta-sep">•</span>
+                  <span
+                    className="session-meta-item session-meta-cost"
+                    title={`in:${formatTokens(session.totalInputTokens)} out:${formatTokens(session.totalOutputTokens)}`}
+                  >
+                    {formatCost(
+                      calculateSessionCost(
+                        session.totalInputTokens,
+                        session.totalOutputTokens,
+                        session.model,
+                      )
+                    )}
+                  </span>
+                </div>
+
+                <div className="session-row-preview">
+                  {session.summary || session.firstPrompt || "No summary yet"}
+                </div>
               </div>
+              {isExpanded && <ToolCallFeed sessionId={session.id} />}
             </div>
           );
         })}

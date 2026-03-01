@@ -1,5 +1,5 @@
 use crate::adapter::AgentAdapter;
-use crate::models::{AgentSession, AgentStatus};
+use crate::models::{AgentSession, AgentStatus, ToolCallInfo};
 
 pub struct AgentMonitor {
     adapters: Vec<Box<dyn AgentAdapter>>,
@@ -27,5 +27,15 @@ impl AgentMonitor {
         });
 
         all_sessions
+    }
+
+    pub fn get_tool_calls(&self, session_id: &str) -> Vec<ToolCallInfo> {
+        for adapter in &self.adapters {
+            let calls = adapter.get_tool_calls(session_id);
+            if !calls.is_empty() {
+                return calls;
+            }
+        }
+        Vec::new()
     }
 }

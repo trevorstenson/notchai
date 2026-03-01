@@ -7,6 +7,9 @@ const PRICING: Record<string, ModelPricing> = {
   opus: { inputPerMillion: 15, outputPerMillion: 75 },
   sonnet: { inputPerMillion: 3, outputPerMillion: 15 },
   haiku: { inputPerMillion: 0.8, outputPerMillion: 4 },
+  "gemini-2.5-pro": { inputPerMillion: 1.25, outputPerMillion: 10 },
+  "gemini-2.5-flash": { inputPerMillion: 0.15, outputPerMillion: 0.6 },
+  "gemini-2.0-flash": { inputPerMillion: 0.1, outputPerMillion: 0.4 },
 };
 
 // Default to Sonnet when model is unknown — most common model.
@@ -18,6 +21,11 @@ function getModelPricing(model: string | null): ModelPricing {
   if (lower.includes("opus")) return PRICING.opus;
   if (lower.includes("sonnet")) return PRICING.sonnet;
   if (lower.includes("haiku")) return PRICING.haiku;
+  if (lower.includes("gemini-2.5-pro")) return PRICING["gemini-2.5-pro"];
+  if (lower.includes("gemini-2.5-flash")) return PRICING["gemini-2.5-flash"];
+  if (lower.includes("gemini-2.0-flash")) return PRICING["gemini-2.0-flash"];
+  // Fallback for unknown Gemini models
+  if (lower.includes("gemini")) return PRICING["gemini-2.5-flash"];
   return DEFAULT_PRICING;
 }
 

@@ -8,6 +8,7 @@ pub enum AgentType {
     Claude,
     Codex,
     Cursor,
+    Gemini,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,8 +17,30 @@ pub enum AgentStatus {
     Operating,
     Idle,
     WaitingForInput,
+    WaitingForApproval,
     Error,
     Completed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingToolInfo {
+    pub request_id: String,
+    pub tool_name: String,
+    pub tool_input_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolCallInfo {
+    pub id: String,
+    pub tool_name: String,
+    pub display_name: String,
+    pub input_summary: String,
+    pub status: String,
+    pub timestamp: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub result_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,9 +130,13 @@ pub struct TranscriptEntry {
     #[serde(rename = "sessionId")]
     #[allow(dead_code)]
     pub session_id: Option<String>,
-    #[allow(dead_code)]
     pub timestamp: Option<String>,
     pub message: Option<TranscriptMessage>,
+    // Fields for top-level tool_result entries
+    pub tool_use_id: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub result: Option<serde_json::Value>,
+    pub is_error: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,6 +145,26 @@ pub struct TranscriptMessage {
     pub role: Option<String>,
     pub model: Option<String>,
     pub usage: Option<TokenUsage>,
+    pub content: Option<Vec<TranscriptContentBlock>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum TranscriptContentBlock {
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    #[serde(rename = "tool_result")]
+    ToolResult {
+        tool_use_id: String,
+        content: Option<serde_json::Value>,
+        is_error: Option<bool>,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -126,4 +173,38 @@ pub struct TokenUsage {
     pub output_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
+}
+
+// === Gemini CLI session data models ===
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiConversationRecord {
+    pub messages: Option<Vec<GeminiMessageRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiMessageRecord {
+    #[serde(rename = "type")]
+    pub message_type: Option<String>,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub model: Option<String>,
+    pub tokens: Option<GeminiTokensSummary>,
+    pub tool_calls: Option<Vec<GeminiToolCallRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiToolCallRecord {
+    pub name: Option<String>,
+    pub input: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiTokensSummary {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
 }

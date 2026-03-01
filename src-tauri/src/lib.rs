@@ -1,5 +1,8 @@
 mod adapter;
 mod adapters;
+mod hook_installer;
+mod hook_models;
+mod hook_server;
 mod models;
 mod monitor;
 mod notch;
@@ -15,10 +18,11 @@ use std::collections::HashSet;
 #[cfg(target_os = "macos")]
 use std::{thread, time::Duration};
 
-use models::{AgentSession, NotchInfo};
+use models::{AgentSession, NotchInfo, ToolCallInfo};
 use monitor::AgentMonitor;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
+use crate::hook_models::PermissionDecision;
 use crate::process::ProcessDetector;
 
 #[cfg(target_os = "macos")]
@@ -201,6 +205,71 @@ fn resume_session(session_id: String, path: String) -> Result<(), String> {
     {
         Err("resume_session is currently only implemented on macOS".to_string())
     }
+}
+
+#[tauri::command]
+async fn respond_to_approval(
+    request_id: String,
+    decision: String,
+    reason: Option<String>,
+    updated_input: Option<String>,
+) -> Result<(), String> {
+    let server = hook_server::get_server().ok_or("Hook server not running")?;
+    server
+        .respond(
+            &request_id,
+            PermissionDecision {
+                decision,
+                reason,
+                updated_input,
+            },
+        )
+        .await
+}
+
+/// Resolve the bundled notchai-hook.py, trying Tauri resource paths and a dev-mode fallback.
+fn resolve_hook_script(app: &tauri::AppHandle) -> Option<PathBuf> {
+    // Try Tauri resource resolution (works in production bundles)
+    for name in &["resources/notchai-hook.py", "notchai-hook.py"] {
+        if let Ok(p) = app.path().resolve(*name, tauri::path::BaseDirectory::Resource) {
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    // Dev-mode fallback: file lives at <project-root>/resources/notchai-hook.py
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("resources").join("notchai-hook.py"))?;
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    None
+}
+
+#[tauri::command]
+fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        let resource_path = resolve_hook_script(&app)
+            .ok_or("Cannot find notchai-hook.py in app bundle or project resources")?;
+        hook_installer::install_hooks(&resource_path)?;
+    } else {
+        hook_installer::uninstall_hooks()?;
+    }
+    hook_installer::set_hooks_enabled(enabled)
+}
+
+#[tauri::command]
+fn get_hooks_enabled() -> bool {
+    hook_installer::get_hooks_enabled()
+}
+
+#[tauri::command]
+fn get_session_tool_calls(
+    session_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Vec<ToolCallInfo> {
+    state.monitor.lock().unwrap().get_tool_calls(&session_id)
 }
 
 #[cfg(target_os = "macos")]
@@ -758,9 +827,26 @@ pub fn run() {
                 Box::new(adapters::claude::ClaudeAdapter::new()),
                 Box::new(adapters::codex::CodexAdapter::new()),
                 Box::new(adapters::cursor::CursorAdapter::new()),
+                Box::new(adapters::gemini::GeminiAdapter::new()),
             ])),
         })
         .setup(|app| {
+            // Install hooks if enabled and spawn the socket server
+            let app_handle = app.handle().clone();
+            if let Some(resource_path) = resolve_hook_script(app.handle()) {
+                if let Err(e) = hook_installer::install_hooks_if_enabled(&resource_path) {
+                    eprintln!("[hooks] install failed: {}", e);
+                }
+            } else {
+                eprintln!("[hooks] could not resolve notchai-hook.py resource path");
+            }
+
+            // Spawn the hook socket server as a tokio task
+            let server_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                hook_server::start(server_handle).await;
+            });
+
             let window = app.get_webview_window("main").unwrap();
 
             // Detect notch and position an invisible hover zone over it.
@@ -772,7 +858,7 @@ pub fn run() {
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.
-            let hover_height = 320.0;
+            let hover_height = 420.0;
             let x = notch.center_x() - hover_width / 2.0;
 
             window
@@ -790,7 +876,7 @@ pub fn run() {
                     notch.center_x(),
                     hover_width,
                     24.0,
-                    320.0,
+                    420.0,
                     detection.screen_top_macos_y,
                 );
             }
@@ -829,8 +915,18 @@ pub fn run() {
             get_sessions,
             get_notch_info,
             open_session_location,
-            resume_session
+            resume_session,
+            respond_to_approval,
+            toggle_hooks_enabled,
+            get_hooks_enabled,
+            get_session_tool_calls
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Clean up the Unix socket on app exit
+                let _ = std::fs::remove_file("/tmp/notchai.sock");
+            }
+        });
 }
