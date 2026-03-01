@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { ScreenInfo } from "../types";
 
 interface SettingsViewProps {
@@ -27,6 +28,23 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         setSoundEnabled(settings.soundEnabled);
       })
       .catch(console.error);
+  }, []);
+
+  // Refresh screen list when monitors are connected/disconnected
+  useEffect(() => {
+    const unlisten = listen("screens-changed", () => {
+      invoke<ScreenInfo[]>("list_screens").then(setScreens).catch(console.error);
+      invoke<{
+        hooksEnabled: boolean;
+        selectedScreen: number | null;
+        soundEnabled: boolean;
+      }>("get_settings")
+        .then((settings) => {
+          setSelectedScreen(settings.selectedScreen);
+        })
+        .catch(console.error);
+    });
+    return () => { unlisten.then((fn) => fn()); };
   }, []);
 
   const handleScreenSelect = async (index: number | null) => {

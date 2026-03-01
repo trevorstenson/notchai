@@ -338,3 +338,32 @@ pub fn detect_notch_on_screen(screen_index: Option<usize>) -> NotchDetection {
     let _ = screen_index;
     detect_notch()
 }
+
+/// Resolve a saved screen selection to a current screen index using name-based matching.
+/// Falls back to index-based matching for legacy configs without a saved name.
+/// Returns None (auto-detect) if the saved monitor is no longer connected.
+pub fn resolve_screen_index(saved_index: Option<usize>, saved_name: Option<&str>) -> Option<usize> {
+    if saved_index.is_none() && saved_name.is_none() {
+        return None; // auto-detect
+    }
+
+    let screens = list_screens();
+
+    // Prefer name-based matching — indexes can shift when monitors are added/removed
+    if let Some(name) = saved_name {
+        if let Some(screen) = screens.iter().find(|s| s.name == name) {
+            return Some(screen.index);
+        }
+        // Named monitor not found (disconnected) — fall back to auto-detect
+        return None;
+    }
+
+    // Legacy: name not saved, use index if still in-bounds
+    if let Some(idx) = saved_index {
+        if idx < screens.len() {
+            return Some(idx);
+        }
+    }
+
+    None
+}
