@@ -90,7 +90,7 @@
         "npx tsc --noEmit passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
