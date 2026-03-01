@@ -8,6 +8,7 @@ pub enum AgentType {
     Claude,
     Codex,
     Cursor,
+    Gemini,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -135,4 +136,38 @@ pub struct TokenUsage {
     pub output_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
     pub cache_read_input_tokens: Option<u64>,
+}
+
+// === Gemini CLI session data models ===
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiConversationRecord {
+    pub messages: Option<Vec<GeminiMessageRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiMessageRecord {
+    #[serde(rename = "type")]
+    pub message_type: Option<String>,
+    pub role: Option<String>,
+    pub content: Option<String>,
+    pub model: Option<String>,
+    pub tokens: Option<GeminiTokensSummary>,
+    pub tool_calls: Option<Vec<GeminiToolCallRecord>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiToolCallRecord {
+    pub name: Option<String>,
+    pub input: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeminiTokensSummary {
+    pub input: Option<u64>,
+    pub output: Option<u64>,
 }

@@ -805,6 +805,7 @@ pub fn run() {
                 Box::new(adapters::claude::ClaudeAdapter::new()),
                 Box::new(adapters::codex::CodexAdapter::new()),
                 Box::new(adapters::cursor::CursorAdapter::new()),
+                Box::new(adapters::gemini::GeminiAdapter::new()),
             ])),
         })
         .setup(|app| {

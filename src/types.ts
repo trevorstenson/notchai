@@ -1,4 +1,4 @@
-export type AgentType = "claude" | "codex" | "cursor";
+export type AgentType = "claude" | "codex" | "cursor" | "gemini";
 
 export type AgentStatus =
   | "operating"
