@@ -1,4 +1,5 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { PermissionRequestEvent } from "../types/hooks";
 import { parseAskUserQuestion } from "../types/hooks";
 import { QuestionCard } from "./QuestionCard";
@@ -123,6 +124,24 @@ export function ToolApproval({
   pendingApprovals,
   respondToApproval,
 }: ToolApprovalProps) {
+  // Play sound + haptic when a new approval appears
+  const lastApprovalId = useRef<string | null>(null);
+  useEffect(() => {
+    if (pendingApprovals.length === 0) return;
+    const currentId = pendingApprovals[0].requestId;
+    if (currentId !== lastApprovalId.current) {
+      lastApprovalId.current = currentId;
+      invoke<boolean>("get_sound_enabled")
+        .then((enabled) => {
+          if (enabled) {
+            invoke("play_sound", { name: "Tink" }).catch(() => {});
+            invoke("play_haptic").catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+  }, [pendingApprovals]);
+
   if (pendingApprovals.length === 0) return null;
 
   const current = pendingApprovals[0];
