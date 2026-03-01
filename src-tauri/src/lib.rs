@@ -50,6 +50,7 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 struct SettingsPayload {
     hooks_enabled: bool,
+    codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
 }
@@ -264,6 +265,27 @@ fn resolve_hook_script(app: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
+/// Resolve the bundled notchai-codex-notify.sh, trying Tauri resource paths and a dev-mode fallback.
+fn resolve_codex_notify_script(app: &tauri::AppHandle) -> Option<PathBuf> {
+    for name in &[
+        "resources/notchai-codex-notify.sh",
+        "notchai-codex-notify.sh",
+    ] {
+        if let Ok(p) = app.path().resolve(*name, tauri::path::BaseDirectory::Resource) {
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("resources").join("notchai-codex-notify.sh"))?;
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    None
+}
+
 #[tauri::command]
 fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     if enabled {
@@ -279,6 +301,23 @@ fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), Stri
 #[tauri::command]
 fn get_hooks_enabled() -> bool {
     hook_installer::get_hooks_enabled()
+}
+
+#[tauri::command]
+fn toggle_codex_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        let resource_path = resolve_codex_notify_script(&app)
+            .ok_or("Cannot find notchai-codex-notify.sh in app bundle or project resources")?;
+        hook_installer::install_codex_hooks(&resource_path)?;
+    } else {
+        hook_installer::uninstall_codex_hooks()?;
+    }
+    hook_installer::set_codex_hooks_enabled(enabled)
+}
+
+#[tauri::command]
+fn get_codex_hooks_enabled() -> bool {
+    hook_installer::get_codex_hooks_enabled()
 }
 
 #[tauri::command]
@@ -388,6 +427,7 @@ fn set_selected_screen(
 fn get_settings() -> SettingsPayload {
     SettingsPayload {
         hooks_enabled: hook_installer::get_hooks_enabled(),
+        codex_hooks_enabled: hook_installer::get_codex_hooks_enabled(),
         selected_screen: hook_installer::get_selected_screen(),
         sound_enabled: hook_installer::get_sound_enabled(),
     }
@@ -396,6 +436,7 @@ fn get_settings() -> SettingsPayload {
 #[tauri::command]
 fn save_settings(
     hooks_enabled: bool,
+    codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
     window: tauri::Window,
@@ -413,6 +454,19 @@ fn save_settings(
             hook_installer::uninstall_hooks()?;
         }
         hook_installer::set_hooks_enabled(hooks_enabled)?;
+    }
+
+    // Handle Codex hooks toggle
+    let current_codex_hooks = hook_installer::get_codex_hooks_enabled();
+    if codex_hooks_enabled != current_codex_hooks {
+        if codex_hooks_enabled {
+            let resource_path = resolve_codex_notify_script(&app)
+                .ok_or("Cannot find notchai-codex-notify.sh in app bundle or project resources")?;
+            hook_installer::install_codex_hooks(&resource_path)?;
+        } else {
+            hook_installer::uninstall_codex_hooks()?;
+        }
+        hook_installer::set_codex_hooks_enabled(codex_hooks_enabled)?;
     }
 
     // Handle screen selection
@@ -1057,10 +1111,19 @@ pub fn run() {
             let app_handle = app.handle().clone();
             if let Some(resource_path) = resolve_hook_script(app.handle()) {
                 if let Err(e) = hook_installer::install_hooks_if_enabled(&resource_path) {
-                    eprintln!("[hooks] install failed: {}", e);
+                    eprintln!("[hooks] Claude hooks install failed: {}", e);
                 }
             } else {
                 eprintln!("[hooks] could not resolve notchai-hook.py resource path");
+            }
+
+            // Install Codex notify hooks if enabled
+            if let Some(codex_script_path) = resolve_codex_notify_script(app.handle()) {
+                if let Err(e) = hook_installer::install_codex_hooks_if_enabled(&codex_script_path) {
+                    eprintln!("[hooks] Codex hooks install failed: {}", e);
+                }
+            } else {
+                eprintln!("[hooks] could not resolve notchai-codex-notify.sh resource path");
             }
 
             // Create the event bus for unified event pipeline
@@ -1173,6 +1236,8 @@ pub fn run() {
             respond_to_approval,
             toggle_hooks_enabled,
             get_hooks_enabled,
+            toggle_codex_hooks_enabled,
+            get_codex_hooks_enabled,
             get_session_tool_calls,
             play_sound,
             play_haptic,

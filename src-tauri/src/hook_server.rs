@@ -240,6 +240,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                         &timestamp,
                         &msg.tool_name,
                         &msg.tool_input,
+                        &msg.agent,
                     ) {
                         bus.publish(normalized);
                     }
@@ -249,7 +250,25 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
     }
 }
 
-/// Map a Claude Code hook event_type to a NormalizedEvent.
+/// Determine AgentType from the agent field in a HookMessage.
+fn agent_type_from_string(agent: &Option<String>) -> AgentType {
+    match agent.as_deref() {
+        Some("codex") => AgentType::Codex,
+        Some("gemini") => AgentType::Gemini,
+        Some("cursor") => AgentType::Cursor,
+        _ => AgentType::Claude,
+    }
+}
+
+/// Determine EventSource from the agent field in a HookMessage.
+fn event_source_from_agent(agent: &Option<String>) -> EventSource {
+    match agent.as_deref() {
+        Some("codex") => EventSource::Notify,
+        _ => EventSource::Hook,
+    }
+}
+
+/// Map a hook event_type to a NormalizedEvent.
 /// Returns None for event types that don't have a meaningful mapping.
 fn map_hook_to_normalized_event(
     event_type: &str,
@@ -257,9 +276,10 @@ fn map_hook_to_normalized_event(
     timestamp: &str,
     tool_name: &Option<String>,
     tool_input: &Option<String>,
+    agent: &Option<String>,
 ) -> Option<NormalizedEvent> {
-    let agent_type = AgentType::Claude;
-    let source = EventSource::Hook;
+    let agent_type = agent_type_from_string(agent);
+    let source = event_source_from_agent(agent);
     let sid = session_id.to_string();
     let ts = timestamp.to_string();
 
@@ -300,6 +320,12 @@ fn map_hook_to_normalized_event(
             timestamp: ts,
             source,
             new_status: AgentStatus::Operating,
+        }),
+        "task_complete" => Some(NormalizedEvent::TaskCompleted {
+            agent_type,
+            session_id: sid,
+            timestamp: ts,
+            source,
         }),
         _ => {
             eprintln!(
