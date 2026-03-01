@@ -1069,10 +1069,36 @@ pub fn run() {
                 hook_server::start(server_handle).await;
             });
 
-            // Spawn the OTEL HTTP/protobuf ingestion server as a tokio task
+            // Create the event bus for unified event pipeline
+            let event_bus = event_bus::EventBus::new();
+
+            // Spawn the OTEL HTTP/protobuf ingestion server with EventBus
+            let otel_bus = event_bus.clone();
             tauri::async_runtime::spawn(async move {
-                otel_server::start().await;
+                otel_server::start(otel_bus).await;
             });
+
+            // Spawn the EventBus → Tauri bridge: forwards NormalizedEvent to the frontend
+            {
+                let bridge_handle = app_handle.clone();
+                let mut rx = event_bus.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let _ = bridge_handle.emit("event-bus:normalized-event", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                eprintln!("[event-bus] bridge lagged, skipped {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                eprintln!("[event-bus] channel closed, bridge stopping");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
 
             let window = app.get_webview_window("main").unwrap();
 
