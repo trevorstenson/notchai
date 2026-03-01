@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { StatusDot } from "./StatusDot";
 import { STATUS_LABELS } from "../types";
@@ -55,6 +55,21 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
   const [feedbackBySession, setFeedbackBySession] = useState<
     Record<string, "opened" | "error">
   >({});
+  const [hooksEnabled, setHooksEnabled] = useState(true);
+
+  useEffect(() => {
+    invoke<boolean>("get_hooks_enabled").then(setHooksEnabled).catch(console.error);
+  }, []);
+
+  const toggleHooks = async () => {
+    const next = !hooksEnabled;
+    try {
+      await invoke("toggle_hooks_enabled", { enabled: next });
+      setHooksEnabled(next);
+    } catch (err) {
+      console.error("[notchai-ui] toggle_hooks_enabled failed", err);
+    }
+  };
 
   const filteredSessions = useMemo(() => {
     const now = Date.now();
@@ -120,14 +135,23 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
       <div className="expanded-content">
         <div className="expanded-controls">
           <span className="expanded-title">Sessions</span>
-          {DEBUG_MODE && (
+          <div className="expanded-controls-right">
             <button
-              className="expanded-debug-toggle"
-              onClick={() => setShowAllDebug((v) => !v)}
+              className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
+              onClick={toggleHooks}
+              title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
             >
-              {showAllDebug ? "Hide debug" : "Show all (debug)"}
+              {hooksEnabled ? "Hooks on" : "Hooks off"}
             </button>
-          )}
+            {DEBUG_MODE && (
+              <button
+                className="expanded-debug-toggle"
+                onClick={() => setShowAllDebug((v) => !v)}
+              >
+                {showAllDebug ? "Hide debug" : "Show all (debug)"}
+              </button>
+            )}
+          </div>
         </div>
         <div className="expanded-empty">No visible sessions</div>
       </div>
@@ -141,14 +165,23 @@ export function ExpandedView({ sessions, onSessionOpened }: ExpandedViewProps) {
           Sessions
           {!showAllDebug && hiddenCount > 0 ? ` (${hiddenCount} hidden)` : ""}
         </span>
-        {DEBUG_MODE && (
+        <div className="expanded-controls-right">
           <button
-            className="expanded-debug-toggle"
-            onClick={() => setShowAllDebug((v) => !v)}
+            className={`expanded-debug-toggle ${hooksEnabled ? "expanded-debug-toggle--active" : ""}`}
+            onClick={toggleHooks}
+            title={hooksEnabled ? "Hooks enabled — click to disable" : "Hooks disabled — click to enable"}
           >
-            {showAllDebug ? "Hide debug" : "Show all (debug)"}
+            {hooksEnabled ? "Hooks on" : "Hooks off"}
           </button>
-        )}
+          {DEBUG_MODE && (
+            <button
+              className="expanded-debug-toggle"
+              onClick={() => setShowAllDebug((v) => !v)}
+            >
+              {showAllDebug ? "Hide debug" : "Show all (debug)"}
+            </button>
+          )}
+        </div>
       </div>
       <div className="expanded-divider" />
       <div className="expanded-sessions">

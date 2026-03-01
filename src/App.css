@@ -237,6 +237,17 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.expanded-debug-toggle--active {
+  border-color: rgba(0, 255, 136, 0.3);
+  color: rgba(0, 255, 136, 0.85);
+}
+
+.expanded-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 @keyframes contentFadeIn {
   from {
     opacity: 0;
