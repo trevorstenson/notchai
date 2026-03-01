@@ -335,6 +335,138 @@ impl GeminiAdapter {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::GeminiConversationRecord;
+
+    #[test]
+    fn test_gemini_conversation_record_parsing() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": "Help me write a function"},
+                {"type": "gemini", "role": "model", "model": "gemini-2.0-pro", "content": "Here's a function...", "tokens": {"input": 50, "output": 100}},
+                {"role": "user", "content": "Now add tests"},
+                {"type": "gemini", "role": "model", "model": "gemini-2.0-pro", "content": "Here are the tests...", "tokens": {"input": 150, "output": 200}}
+            ]
+        }"#;
+
+        let record: GeminiConversationRecord = serde_json::from_str(json).unwrap();
+        let messages = record.messages.unwrap();
+        assert_eq!(messages.len(), 4);
+
+        assert_eq!(messages[0].role.as_deref(), Some("user"));
+        assert_eq!(
+            messages[0].content.as_deref(),
+            Some("Help me write a function")
+        );
+
+        assert_eq!(messages[1].message_type.as_deref(), Some("gemini"));
+        assert_eq!(messages[1].model.as_deref(), Some("gemini-2.0-pro"));
+
+        let tokens = messages[1].tokens.as_ref().unwrap();
+        assert_eq!(tokens.input, Some(50));
+        assert_eq!(tokens.output, Some(100));
+
+        let tokens2 = messages[3].tokens.as_ref().unwrap();
+        assert_eq!(tokens2.input, Some(150));
+        assert_eq!(tokens2.output, Some(200));
+    }
+
+    #[test]
+    fn test_gemini_tool_calls_extraction() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": "Read file foo.txt"},
+                {"type": "gemini", "role": "model", "content": "I'll read that file", "toolCalls": [
+                    {"name": "read_file", "input": {"path": "foo.txt"}},
+                    {"name": "write_file", "input": {"path": "bar.txt", "content": "hello"}}
+                ]}
+            ]
+        }"#;
+
+        let path = std::env::temp_dir().join("notchai_test_gemini_tools.json");
+        std::fs::write(&path, json).unwrap();
+
+        let calls = GeminiAdapter::parse_tool_calls_from_session(&path);
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].tool_name, "read_file");
+        assert_eq!(calls[0].id, "gemini-tc-0");
+        assert!(calls[0].input_summary.contains("path"));
+        assert_eq!(calls[1].tool_name, "write_file");
+        assert_eq!(calls[1].id, "gemini-tc-1");
+        assert!(calls[1].input_summary.contains("path"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_gemini_empty_messages() {
+        let json = r#"{"messages": []}"#;
+        let record: GeminiConversationRecord = serde_json::from_str(json).unwrap();
+        let messages = record.messages.unwrap();
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_gemini_null_messages() {
+        let json = r#"{}"#;
+        let record: GeminiConversationRecord = serde_json::from_str(json).unwrap();
+        assert!(record.messages.is_none());
+    }
+
+    #[test]
+    fn test_gemini_parse_session_counts() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"type": "gemini", "role": "model", "model": "gemini-2.0-flash", "content": "Hi!", "tokens": {"input": 10, "output": 20}},
+                {"role": "user", "content": "Help me"},
+                {"type": "gemini", "role": "model", "content": "Sure!", "tokens": {"input": 30, "output": 40}}
+            ]
+        }"#;
+
+        let path = std::env::temp_dir().join("notchai_test_gemini_session.json");
+        std::fs::write(&path, json).unwrap();
+
+        let adapter = GeminiAdapter {
+            process_detector: ProcessDetector::new(),
+            mtime_cache: Mutex::new(HashMap::new()),
+            session_cache: Mutex::new(HashMap::new()),
+        };
+
+        let data = adapter.parse_session(&path, "test-hash").unwrap();
+
+        assert_eq!(data.message_count, 4);
+        assert_eq!(data.first_prompt, Some("Hello".to_string()));
+        assert_eq!(data.model, Some("gemini-2.0-flash".to_string()));
+        assert_eq!(data.total_input_tokens, 40);
+        assert_eq!(data.total_output_tokens, 60);
+        assert_eq!(data.project_hash, "test-hash");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_gemini_no_tool_calls() {
+        let json = r#"{
+            "messages": [
+                {"role": "user", "content": "Just a question"},
+                {"type": "gemini", "role": "model", "content": "Here's the answer"}
+            ]
+        }"#;
+
+        let path = std::env::temp_dir().join("notchai_test_gemini_no_tools.json");
+        std::fs::write(&path, json).unwrap();
+
+        let calls = GeminiAdapter::parse_tool_calls_from_session(&path);
+        assert!(calls.is_empty());
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 impl AgentAdapter for GeminiAdapter {
     fn agent_type(&self) -> AgentType {
         AgentType::Gemini

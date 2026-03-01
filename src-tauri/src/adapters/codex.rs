@@ -409,6 +409,148 @@ impl CodexAdapter {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_meta_parsing() {
+        let mut data = CodexSessionData::default();
+        let line = r#"{"type":"session_meta","payload":{"id":"codex-sess-1","timestamp":"2024-01-01T00:00:00Z","cwd":"/home/user/project","git":{"branch":"main"}}}"#;
+
+        CodexAdapter::apply_line(&mut data, line);
+
+        assert_eq!(data.id, Some("codex-sess-1".to_string()));
+        assert_eq!(data.cwd, "/home/user/project");
+        assert_eq!(data.created, "2024-01-01T00:00:00Z");
+        assert_eq!(data.git_branch, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_event_msg_user_message() {
+        let mut data = CodexSessionData::default();
+        let line = r#"{"type":"event_msg","payload":{"type":"user_message","message":"Hello, help me with this"}}"#;
+
+        CodexAdapter::apply_line(&mut data, line);
+
+        assert_eq!(data.message_count, 1);
+        assert_eq!(
+            data.first_user_message,
+            Some("Hello, help me with this".to_string())
+        );
+        assert_eq!(data.last_event_type, Some("user_message".to_string()));
+    }
+
+    #[test]
+    fn test_event_msg_agent_message() {
+        let mut data = CodexSessionData::default();
+        let line = r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Sure, I can help"}}"#;
+
+        CodexAdapter::apply_line(&mut data, line);
+
+        assert_eq!(data.message_count, 1);
+        assert_eq!(data.first_user_message, None);
+        assert_eq!(data.last_event_type, Some("agent_message".to_string()));
+    }
+
+    #[test]
+    fn test_event_msg_token_count() {
+        let mut data = CodexSessionData::default();
+        let line = r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":500,"output_tokens":300,"reasoning_output_tokens":100}}}}"#;
+
+        CodexAdapter::apply_line(&mut data, line);
+
+        assert_eq!(data.total_input_tokens, 1500);
+        assert_eq!(data.total_output_tokens, 400);
+    }
+
+    #[test]
+    fn test_turn_context_model() {
+        let mut data = CodexSessionData::default();
+        let line = r#"{"type":"turn_context","payload":{"model":"o3-mini"}}"#;
+
+        CodexAdapter::apply_line(&mut data, line);
+
+        assert_eq!(data.model, Some("o3-mini".to_string()));
+    }
+
+    #[test]
+    fn test_malformed_line_ignored() {
+        let mut data = CodexSessionData::default();
+        CodexAdapter::apply_line(&mut data, "not valid json{{{");
+        CodexAdapter::apply_line(&mut data, "");
+        CodexAdapter::apply_line(&mut data, "   ");
+
+        assert_eq!(data.id, None);
+        assert_eq!(data.message_count, 0);
+        assert_eq!(data.total_input_tokens, 0);
+        assert_eq!(data.total_output_tokens, 0);
+    }
+
+    #[test]
+    fn test_incremental_message_accumulation() {
+        let mut data = CodexSessionData::default();
+
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"First message"}}"#,
+        );
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Response"}}"#,
+        );
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"Second message"}}"#,
+        );
+
+        assert_eq!(data.message_count, 3);
+        assert_eq!(
+            data.first_user_message,
+            Some("First message".to_string())
+        );
+        assert_eq!(data.last_event_type, Some("user_message".to_string()));
+    }
+
+    #[test]
+    fn test_task_events() {
+        let mut data = CodexSessionData::default();
+
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+        );
+        assert_eq!(data.last_event_type, Some("task_started".to_string()));
+
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#,
+        );
+        assert_eq!(data.last_event_type, Some("task_complete".to_string()));
+    }
+
+    #[test]
+    fn test_token_count_cumulative_overwrite() {
+        let mut data = CodexSessionData::default();
+
+        // First token count
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+        );
+        assert_eq!(data.total_input_tokens, 100);
+        assert_eq!(data.total_output_tokens, 50);
+
+        // Second token count overwrites (cumulative totals)
+        CodexAdapter::apply_line(
+            &mut data,
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":500,"output_tokens":200}}}}"#,
+        );
+        assert_eq!(data.total_input_tokens, 500);
+        assert_eq!(data.total_output_tokens, 200);
+    }
+}
+
 impl AgentAdapter for CodexAdapter {
     fn agent_type(&self) -> AgentType {
         AgentType::Codex

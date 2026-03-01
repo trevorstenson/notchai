@@ -296,3 +296,263 @@ fn map_span_to_event(
     );
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue};
+    use opentelemetry_proto::tonic::trace::v1::Status;
+
+    fn kv_string(key: &str, value: &str) -> KeyValue {
+        KeyValue {
+            key: key.to_string(),
+            value: Some(AnyValue {
+                value: Some(Value::StringValue(value.to_string())),
+            }),
+        }
+    }
+
+    fn kv_int(key: &str, value: i64) -> KeyValue {
+        KeyValue {
+            key: key.to_string(),
+            value: Some(AnyValue {
+                value: Some(Value::IntValue(value)),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_tool_span_completed() {
+        let span = Span {
+            name: "tool.execution".to_string(),
+            trace_id: vec![0x01, 0x02, 0x03],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            end_time_unix_nano: 1_700_000_001_000_000_000,
+            attributes: vec![
+                kv_string("session.id", "test-sess"),
+                kv_string("tool.name", "Read"),
+            ],
+            status: Some(Status {
+                code: OtelStatusCode::Ok as i32,
+                message: String::new(),
+            }),
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::ToolCompleted {
+                agent_type,
+                session_id,
+                tool_name,
+                status,
+                duration_ms,
+                ..
+            } => {
+                assert_eq!(agent_type, AgentType::Claude);
+                assert_eq!(session_id, "test-sess");
+                assert_eq!(tool_name, "Read");
+                assert_eq!(status, "success");
+                assert_eq!(duration_ms, Some(1000));
+            }
+            other => panic!("Expected ToolCompleted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tool_span_started() {
+        let span = Span {
+            name: "tool.call".to_string(),
+            trace_id: vec![0x01, 0x02],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            end_time_unix_nano: 0,
+            attributes: vec![
+                kv_string("session.id", "test-sess"),
+                kv_string("tool.name", "Write"),
+                kv_string("tool.input", "some input"),
+            ],
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::ToolStarted {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                assert_eq!(tool_name, "Write");
+                assert_eq!(tool_input, Some("some input".to_string()));
+            }
+            other => panic!("Expected ToolStarted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_session_start_span() {
+        let span = Span {
+            name: "session.start".to_string(),
+            trace_id: vec![0xab, 0xcd],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            attributes: vec![kv_string("session.id", "sess-abc")],
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Codex, "codex-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::SessionStarted {
+                agent_type,
+                session_id,
+                source,
+                ..
+            } => {
+                assert_eq!(agent_type, AgentType::Codex);
+                assert_eq!(session_id, "sess-abc");
+                assert_eq!(source, EventSource::Otel);
+            }
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_session_end_span() {
+        let span = Span {
+            name: "session.end".to_string(),
+            trace_id: vec![0xab, 0xcd],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            attributes: vec![kv_string("session_id", "sess-xyz")],
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Gemini, "gemini-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::SessionEnded {
+                agent_type,
+                session_id,
+                ..
+            } => {
+                assert_eq!(agent_type, AgentType::Gemini);
+                assert_eq!(session_id, "sess-xyz");
+            }
+            other => panic!("Expected SessionEnded, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_unknown_span_returns_none() {
+        let span = Span {
+            name: "custom.metric.something".to_string(),
+            trace_id: vec![0x01],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_none(), "Unknown span types should return None");
+    }
+
+    #[test]
+    fn test_token_usage_span() {
+        let span = Span {
+            name: "llm.token_usage".to_string(),
+            trace_id: vec![0x01],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            attributes: vec![
+                kv_string("session.id", "sess-tok"),
+                kv_int("llm.input_tokens", 500),
+                kv_int("llm.output_tokens", 200),
+            ],
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::TokensUsed {
+                input_tokens,
+                output_tokens,
+                ..
+            } => {
+                assert_eq!(input_tokens, 500);
+                assert_eq!(output_tokens, 200);
+            }
+            other => panic!("Expected TokensUsed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_agent_type_from_service_name_mapping() {
+        assert_eq!(
+            agent_type_from_service_name("claude-code"),
+            AgentType::Claude
+        );
+        assert_eq!(
+            agent_type_from_service_name("Codex-Agent"),
+            AgentType::Codex
+        );
+        assert_eq!(
+            agent_type_from_service_name("cursor-ide"),
+            AgentType::Cursor
+        );
+        assert_eq!(
+            agent_type_from_service_name("gemini-cli"),
+            AgentType::Gemini
+        );
+        assert_eq!(
+            agent_type_from_service_name("unknown-service"),
+            AgentType::Claude
+        );
+    }
+
+    #[test]
+    fn test_session_id_fallback_to_trace_id() {
+        let span = Span {
+            name: "session.start".to_string(),
+            trace_id: vec![0xab, 0xcd, 0xef],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            // No session.id or session_id attributes
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::SessionStarted { session_id, .. } => {
+                assert_eq!(session_id, "abcdef");
+            }
+            other => panic!("Expected SessionStarted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tool_span_error_status() {
+        let span = Span {
+            name: "tool.execution".to_string(),
+            trace_id: vec![0x01],
+            start_time_unix_nano: 1_700_000_000_000_000_000,
+            end_time_unix_nano: 1_700_000_002_000_000_000,
+            attributes: vec![
+                kv_string("session.id", "sess-err"),
+                kv_string("tool.name", "Bash"),
+            ],
+            status: Some(Status {
+                code: OtelStatusCode::Error as i32,
+                message: "command failed".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let event = map_span_to_event(&span, AgentType::Claude, "claude-agent");
+        assert!(event.is_some());
+        match event.unwrap() {
+            NormalizedEvent::ToolCompleted { status, .. } => {
+                assert_eq!(status, "error");
+            }
+            other => panic!("Expected ToolCompleted, got {:?}", other),
+        }
+    }
+}

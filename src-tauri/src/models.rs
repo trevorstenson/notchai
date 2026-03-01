@@ -197,7 +197,7 @@ pub enum EventSource {
     Poll,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum NormalizedEvent {
     SessionStarted {
@@ -301,4 +301,122 @@ pub struct GeminiToolCallRecord {
 pub struct GeminiTokensSummary {
     pub input: Option<u64>,
     pub output: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalized_event_serde_roundtrip_session_started() {
+        let event = NormalizedEvent::SessionStarted {
+            agent_type: AgentType::Claude,
+            session_id: "sess-123".to_string(),
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            source: EventSource::Otel,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: NormalizedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_normalized_event_serde_roundtrip_tool_completed() {
+        let event = NormalizedEvent::ToolCompleted {
+            agent_type: AgentType::Codex,
+            session_id: "sess-456".to_string(),
+            timestamp: "2024-01-01T00:00:01Z".to_string(),
+            source: EventSource::Hook,
+            tool_name: "Read".to_string(),
+            status: "success".to_string(),
+            duration_ms: Some(150),
+            result_preview: Some("file content...".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: NormalizedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_normalized_event_serde_roundtrip_tokens_used() {
+        let event = NormalizedEvent::TokensUsed {
+            agent_type: AgentType::Gemini,
+            session_id: "sess-789".to_string(),
+            timestamp: "2024-01-01T00:00:02Z".to_string(),
+            source: EventSource::Poll,
+            input_tokens: 1000,
+            output_tokens: 500,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: NormalizedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_normalized_event_serde_roundtrip_error() {
+        let event = NormalizedEvent::Error {
+            agent_type: AgentType::Cursor,
+            session_id: "sess-err".to_string(),
+            timestamp: "2024-01-01T00:00:03Z".to_string(),
+            source: EventSource::Notify,
+            message: "Something went wrong".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: NormalizedEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, deserialized);
+    }
+
+    #[test]
+    fn test_normalized_event_serde_roundtrip_all_variants() {
+        let events = vec![
+            NormalizedEvent::SessionStarted {
+                agent_type: AgentType::Claude,
+                session_id: "s1".to_string(),
+                timestamp: "t1".to_string(),
+                source: EventSource::Otel,
+            },
+            NormalizedEvent::SessionEnded {
+                agent_type: AgentType::Codex,
+                session_id: "s2".to_string(),
+                timestamp: "t2".to_string(),
+                source: EventSource::Hook,
+            },
+            NormalizedEvent::ToolStarted {
+                agent_type: AgentType::Claude,
+                session_id: "s3".to_string(),
+                timestamp: "t3".to_string(),
+                source: EventSource::Otel,
+                tool_name: "Bash".to_string(),
+                tool_input: Some("ls -la".to_string()),
+            },
+            NormalizedEvent::StatusChanged {
+                agent_type: AgentType::Gemini,
+                session_id: "s4".to_string(),
+                timestamp: "t4".to_string(),
+                source: EventSource::Poll,
+                new_status: AgentStatus::Operating,
+            },
+            NormalizedEvent::PermissionRequested {
+                agent_type: AgentType::Claude,
+                session_id: "s5".to_string(),
+                timestamp: "t5".to_string(),
+                source: EventSource::Hook,
+                tool_name: "Write".to_string(),
+                tool_input: Some("content".to_string()),
+                request_id: "req-1".to_string(),
+            },
+            NormalizedEvent::TaskCompleted {
+                agent_type: AgentType::Codex,
+                session_id: "s6".to_string(),
+                timestamp: "t6".to_string(),
+                source: EventSource::Notify,
+            },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let deserialized: NormalizedEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(event, deserialized);
+        }
+    }
 }

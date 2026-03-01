@@ -172,3 +172,113 @@ impl TranscriptReader {
             .find_map(|e| e.message.as_ref().and_then(|m| m.model.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn write_temp_file(name: &str, lines: &[&str]) -> String {
+        let path = std::env::temp_dir().join(format!("notchai_test_{}", name));
+        let mut f = std::fs::File::create(&path).unwrap();
+        for line in lines {
+            writeln!(f, "{}", line).unwrap();
+        }
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn test_normal_conversation_two_messages() {
+        let path = write_temp_file("transcript_normal", &[
+            r#"{"type":"user","message":{"role":"user","content":[]},"cwd":"/tmp/project","timestamp":"2024-01-01T00:00:00Z"}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","model":"claude-3-opus","usage":{"input_tokens":100,"output_tokens":50},"content":[]},"timestamp":"2024-01-01T00:00:01Z"}"#,
+            r#"{"type":"user","message":{"role":"user","content":[]},"timestamp":"2024-01-01T00:00:02Z"}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","model":"claude-3-opus","usage":{"input_tokens":200,"output_tokens":75},"content":[]},"timestamp":"2024-01-01T00:00:03Z"}"#,
+        ]);
+
+        let mut reader = TranscriptReader::new();
+        let entries = reader.read_recent_entries("test-normal", &path, 100_000);
+
+        assert_eq!(entries.len(), 4);
+
+        let (input, output) = TranscriptReader::get_token_totals(&entries);
+        assert_eq!(input, 300);
+        assert_eq!(output, 125);
+
+        let last_type = TranscriptReader::get_last_message_type(&entries);
+        assert_eq!(last_type, Some("assistant".to_string()));
+
+        let model = TranscriptReader::get_model(&entries);
+        assert_eq!(model, Some("claude-3-opus".to_string()));
+
+        // Telemetry should be accumulated
+        let telemetry = reader.get_telemetry("test-normal");
+        assert_eq!(telemetry.total_input, 300);
+        assert_eq!(telemetry.total_output, 125);
+        assert_eq!(telemetry.model, Some("claude-3-opus".to_string()));
+        assert_eq!(telemetry.cwd, Some("/tmp/project".to_string()));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_tool_use_and_tool_result_correlation() {
+        let path = write_temp_file("transcript_tools", &[
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu-1","name":"Read","input":{"path":"foo.txt"}}]},"timestamp":"2024-01-01T00:00:00Z"}"#,
+            r#"{"type":"tool_result","tool_use_id":"tu-1","duration_ms":150,"result":"file content","is_error":false,"timestamp":"2024-01-01T00:00:01Z"}"#,
+        ]);
+
+        let mut reader = TranscriptReader::new();
+        let entries = reader.read_recent_entries("test-tools", &path, 100_000);
+
+        assert_eq!(entries.len(), 2);
+
+        // First entry: assistant message with tool_use content block
+        let tool_use_entry = &entries[0];
+        assert_eq!(tool_use_entry.entry_type.as_deref(), Some("assistant"));
+        let content = tool_use_entry
+            .message
+            .as_ref()
+            .unwrap()
+            .content
+            .as_ref()
+            .unwrap();
+        assert_eq!(content.len(), 1);
+        match &content[0] {
+            crate::models::TranscriptContentBlock::ToolUse { id, name, .. } => {
+                assert_eq!(id, "tu-1");
+                assert_eq!(name, "Read");
+            }
+            _ => panic!("Expected ToolUse content block"),
+        }
+
+        // Second entry: tool_result correlated by tool_use_id
+        let tool_result = &entries[1];
+        assert_eq!(tool_result.entry_type.as_deref(), Some("tool_result"));
+        assert_eq!(tool_result.tool_use_id.as_deref(), Some("tu-1"));
+        assert_eq!(tool_result.duration_ms, Some(150));
+        assert_eq!(tool_result.is_error, Some(false));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_malformed_jsonl_lines_skipped() {
+        let path = write_temp_file("transcript_malformed", &[
+            r#"{"type":"user","message":{"role":"user","content":[]},"timestamp":"2024-01-01T00:00:00Z"}"#,
+            r#"this is not valid json{{{{"#,
+            r#"{"truncated": true"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[]},"timestamp":"2024-01-01T00:00:01Z"}"#,
+        ]);
+
+        let mut reader = TranscriptReader::new();
+        let entries = reader.read_recent_entries("test-malformed", &path, 100_000);
+
+        // Malformed lines should be silently skipped
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type.as_deref(), Some("user"));
+        assert_eq!(entries[1].entry_type.as_deref(), Some("assistant"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+}
