@@ -30,6 +30,23 @@ def truncate(value, max_len):
     return s[:max_len - 3] + "..."
 
 
+def truncate_tool_input_fields(tool_input_raw, max_field_len=300):
+    """Truncate individual string fields in tool_input while keeping valid JSON.
+
+    Instead of truncating the serialized JSON string (which breaks parsing),
+    this truncates each string value individually so the JSON structure stays valid.
+    """
+    if not isinstance(tool_input_raw, dict):
+        return truncate(str(tool_input_raw), max_field_len)
+    result = {}
+    for key, value in tool_input_raw.items():
+        if isinstance(value, str) and len(value) > max_field_len:
+            result[key] = value[:max_field_len - 3] + "..."
+        else:
+            result[key] = value
+    return json.dumps(result)
+
+
 def build_hook_message(hook_input):
     """Build a HookMessage from the Claude Code hook input JSON."""
     event_type = hook_input.get("hook_event_name", "")
@@ -38,20 +55,22 @@ def build_hook_message(hook_input):
     # tool_input may be a dict; serialize it for transport
     tool_input_raw = hook_input.get("tool_input")
     if tool_input_raw is not None:
-        if isinstance(tool_input_raw, dict):
-            tool_input_str = json.dumps(tool_input_raw)
-        else:
-            tool_input_str = str(tool_input_raw)
         # Don't truncate AskUserQuestion — the frontend needs the full input
         is_ask_question = (
             event_type == "PermissionRequest" and tool_name == "AskUserQuestion"
         )
-        if not is_ask_question:
-            tool_input_str = truncate(tool_input_str, MAX_TOOL_INPUT_LEN)
+        if is_ask_question:
+            if isinstance(tool_input_raw, dict):
+                tool_input_str = json.dumps(tool_input_raw)
+            else:
+                tool_input_str = str(tool_input_raw)
+        else:
+            # Truncate individual fields to keep JSON valid and parseable
+            tool_input_str = truncate_tool_input_fields(tool_input_raw)
     else:
         tool_input_str = None
 
-    return {
+    msg = {
         "event_type": event_type,
         "session_id": hook_input.get("session_id"),
         "cwd": hook_input.get("cwd"),
@@ -61,6 +80,13 @@ def build_hook_message(hook_input):
         "agent": "claude",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+
+    # Forward permission_suggestions so the UI knows if "Always Allow" is available
+    permission_suggestions = hook_input.get("permission_suggestions")
+    if permission_suggestions:
+        msg["permission_suggestions"] = json.dumps(permission_suggestions)
+
+    return msg
 
 
 def send_to_socket(message, wait_for_response=False):
@@ -135,6 +161,7 @@ def main():
         decision = response.get("decision", "allow")
         reason = response.get("reason")
         updated_input_str = response.get("updated_input")
+        updated_permissions_str = response.get("updated_permissions")
 
         if decision == "deny":
             output = {
@@ -152,6 +179,12 @@ def main():
             if updated_input_str:
                 try:
                     decision_obj["updatedInput"] = json.loads(updated_input_str)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            # For "Always Allow": include updatedPermissions rules
+            if updated_permissions_str:
+                try:
+                    decision_obj["updatedPermissions"] = json.loads(updated_permissions_str)
                 except (json.JSONDecodeError, ValueError):
                     pass
             output = {

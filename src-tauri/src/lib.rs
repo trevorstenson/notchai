@@ -226,6 +226,7 @@ async fn respond_to_approval(
     decision: String,
     reason: Option<String>,
     updated_input: Option<String>,
+    updated_permissions: Option<String>,
 ) -> Result<(), String> {
     let server = hook_server::get_server().ok_or("Hook server not running")?;
     server
@@ -235,6 +236,7 @@ async fn respond_to_approval(
                 decision,
                 reason,
                 updated_input,
+                updated_permissions,
             },
         )
         .await

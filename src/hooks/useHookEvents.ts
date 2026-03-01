@@ -81,9 +81,30 @@ export function useHookEvents() {
       },
     );
 
+    // Listen for approvals that were handled elsewhere (e.g., user approved in terminal)
+    const unlistenCancelled = listen<string>(
+      "hook:permission-cancelled",
+      (event) => {
+        const cancelledId = event.payload;
+        setPendingApprovals((prev) =>
+          prev.filter((p) => p.requestId !== cancelledId),
+        );
+        setHookStates((prev) => {
+          const next = new Map(prev);
+          for (const [sid, state] of next) {
+            if (state.pendingApproval?.requestId === cancelledId) {
+              next.set(sid, { ...state, pendingApproval: null });
+            }
+          }
+          return next;
+        });
+      },
+    );
+
     return () => {
       unlistenStatus.then((fn) => fn());
       unlistenPermission.then((fn) => fn());
+      unlistenCancelled.then((fn) => fn());
     };
   }, []);
 
@@ -93,12 +114,14 @@ export function useHookEvents() {
       decision: string,
       reason?: string,
       updatedInput?: string,
+      updatedPermissions?: string,
     ) => {
       await invoke("respond_to_approval", {
         requestId,
         decision,
         reason: reason ?? null,
         updatedInput: updatedInput ?? null,
+        updatedPermissions: updatedPermissions ?? null,
       });
 
       // Remove from pending list

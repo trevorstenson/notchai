@@ -11,6 +11,7 @@ interface ToolApprovalProps {
     decision: string,
     reason?: string,
     updatedInput?: string,
+    updatedPermissions?: string,
   ) => Promise<void>;
 }
 
@@ -43,8 +44,8 @@ function parseToolDisplay(
     switch (toolName) {
       case "Bash":
         return {
-          headline: parsed.command ?? null,
-          detail: parsed.description ?? null,
+          headline: parsed.description ?? null,
+          detail: parsed.command ?? null,
         };
       case "Edit":
         return {
@@ -120,6 +121,31 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "\u2026";
 }
 
+/** Check if permission_suggestions includes a toolAlwaysAllow option. */
+function hasAlwaysAllowOption(permissionSuggestions: string | null): boolean {
+  if (!permissionSuggestions) return false;
+  try {
+    const suggestions = JSON.parse(permissionSuggestions);
+    return Array.isArray(suggestions) &&
+      suggestions.some((s: { type?: string }) => s.type === "toolAlwaysAllow");
+  } catch {
+    return false;
+  }
+}
+
+/** Build an updatedPermissions JSON string from permission_suggestions. */
+function buildAlwaysAllowPermissions(permissionSuggestions: string): string {
+  try {
+    const suggestions = JSON.parse(permissionSuggestions);
+    const rules = suggestions
+      .filter((s: { type?: string }) => s.type === "toolAlwaysAllow")
+      .map((s: { tool?: string }) => ({ pattern: s.tool, allow: true }));
+    return JSON.stringify(rules);
+  } catch {
+    return "[]";
+  }
+}
+
 export function ToolApproval({
   pendingApprovals,
   respondToApproval,
@@ -193,6 +219,22 @@ export function ToolApproval({
           >
             Deny
           </button>
+          {hasAlwaysAllowOption(current.permissionSuggestions) && (
+            <button
+              className="tool-approval-btn tool-approval-btn--always"
+              onClick={() =>
+                respondToApproval(
+                  current.requestId,
+                  "allow",
+                  undefined,
+                  undefined,
+                  buildAlwaysAllowPermissions(current.permissionSuggestions!),
+                )
+              }
+            >
+              Always
+            </button>
+          )}
           <button
             className="tool-approval-btn tool-approval-btn--allow"
             onClick={() => respondToApproval(current.requestId, "allow")}

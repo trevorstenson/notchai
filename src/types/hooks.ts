@@ -16,6 +16,7 @@ export interface PermissionRequestEvent {
   agent: string | null;
   timestamp: string;
   isQuestion: boolean;
+  permissionSuggestions: string | null;
 }
 
 export interface HookSessionState {

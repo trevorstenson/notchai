@@ -11,6 +11,8 @@ pub struct HookMessage {
     pub tool_use_id: Option<String>,
     pub agent: Option<String>,
     pub timestamp: Option<String>,
+    /// JSON string of permission_suggestions from Claude Code PermissionRequest events.
+    pub permission_suggestions: Option<String>,
 }
 
 /// Decision sent back to the hook script for permission requests
@@ -20,6 +22,8 @@ pub struct PermissionDecision {
     pub reason: Option<String>,
     /// For AskUserQuestion: JSON string of updatedInput to pass back via the hook.
     pub updated_input: Option<String>,
+    /// For "always allow": JSON string of updatedPermissions array to pass back via the hook.
+    pub updated_permissions: Option<String>,
 }
 
 /// Payload emitted as a Tauri event for status updates
@@ -47,4 +51,6 @@ pub struct PermissionRequestPayload {
     pub timestamp: String,
     /// True when this is a PermissionRequest for AskUserQuestion (question card flow).
     pub is_question: bool,
+    /// JSON string of permission_suggestions (e.g. [{"type":"toolAlwaysAllow","tool":"Bash"}]).
+    pub permission_suggestions: Option<String>,
 }
