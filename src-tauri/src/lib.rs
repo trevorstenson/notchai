@@ -844,7 +844,7 @@ pub fn run() {
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.
-            let hover_height = 320.0;
+            let hover_height = 420.0;
             let x = notch.center_x() - hover_width / 2.0;
 
             window
@@ -862,7 +862,7 @@ pub fn run() {
                     notch.center_x(),
                     hover_width,
                     24.0,
-                    320.0,
+                    420.0,
                     detection.screen_top_macos_y,
                 );
             }

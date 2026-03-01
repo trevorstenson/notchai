@@ -39,6 +39,17 @@ export interface NotchInfo {
   screenHeight: number;
 }
 
+export interface ToolCallInfo {
+  id: string;
+  toolName: string;
+  displayName: string;
+  inputSummary: string;
+  status: string;
+  timestamp: string | null;
+  durationMs: number | null;
+  resultPreview: string | null;
+}
+
 export const STATUS_COLORS: Record<AgentStatus, string> = {
   operating: "#00FF88",
   idle: "#FFB800",
