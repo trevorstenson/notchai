@@ -13,6 +13,7 @@
 - Gemini adapter uses mtime-based caching: `HashMap<String, SystemTime>` + `HashMap<String, GeminiSessionData>` for skip-if-unchanged
 - For incremental JSONL reads: `BufReader<&File>` supports both `BufRead` and `Seek` — `seek()` invalidates the internal buffer correctly
 - Codex token_count events report cumulative totals (assigned, not accumulated) — safe for incremental reads since latest value is always correct
+- Unit tests live in `#[cfg(test)] mod tests` within each source file; run with `cargo test` from `src-tauri/`; OTEL Span construction uses `..Default::default()` with helper functions `kv_string`/`kv_int` for attributes
 - Codex hook installer uses `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` for idempotent install; script copied to `~/.notchai/hooks/`
 - `codex_hooks_enabled` flag stored alongside `hooks_enabled` in `~/.notchai/config.json` (defaults to true)
 - `map_hook_to_normalized_event()` now takes `agent` param; determines AgentType and EventSource dynamically (codex→Codex+Notify, default→Claude+Hook)
@@ -236,4 +237,24 @@
   - For large JSONL files, reading header (first few lines) + tail (last 50KB) captures both session metadata and recent activity while skipping the middle
   - Gemini files are JSON (not JSONL) so incremental byte-offset reading doesn't apply — mtime-based skip is the right optimization
   - Both caches hold two Mutex locks simultaneously (`offsets` + `session_cache` for Codex, `mtime_cache` + `session_cache` for Gemini) — safe since always acquired in same order and held briefly
+---
+
+## 2026-03-01 - US-024
+- Added 32 unit tests across 5 modules: transcript.rs, otel_server.rs, codex.rs, gemini.rs, models.rs
+- Added `PartialEq` derive to `NormalizedEvent` for serde round-trip assertions
+- TranscriptReader tests (3): normal conversation with 2+ messages and token/telemetry accumulation, tool_use + tool_result correlation by tool_use_id, malformed/truncated JSONL line graceful skipping
+- OTEL span mapping tests (8): tool span completed with duration/status, tool span started (no end time), session.start span, session.end span, unknown span returns None, token usage span with llm.input_tokens/output_tokens, agent_type_from_service_name mapping, session_id fallback to trace_id hex, error status code mapping
+- Codex adapter tests (8): session_meta parsing with id/cwd/git_branch, user_message/agent_message/token_count event_msg subtypes, turn_context model extraction, malformed line ignored, incremental message accumulation, task_started/task_complete events, cumulative token count overwrite behavior
+- Gemini adapter tests (6): conversation record parsing with roles/tokens/models, tool_calls extraction from assistant messages, empty messages array, null/missing messages, parse_session counts (message_count, tokens, model, first_prompt), no tool calls case
+- NormalizedEvent serde tests (5): round-trip for SessionStarted, ToolCompleted, TokensUsed, Error variants, plus all-variants comprehensive test
+- Files changed: src-tauri/src/models.rs, src-tauri/src/transcript.rs, src-tauri/src/otel_server.rs, src-tauri/src/adapters/codex.rs, src-tauri/src/adapters/gemini.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - No `#[cfg(test)]` modules existed prior — this project had zero test infrastructure; tests go in each source file as `#[cfg(test)] mod tests { use super::*; ... }`
+  - OTEL Span protobuf type (from opentelemetry-proto) has `Default` impl — construct with `Span { name: ..., ..Default::default() }` for tests
+  - KeyValue attributes need `AnyValue { value: Some(Value::StringValue(s)) }` nesting — helper functions `kv_string`/`kv_int` make tests much cleaner
+  - `Status.code` field is `i32` (protobuf enum), set via `OtelStatusCode::Ok as i32`; read back via `status.code()` method
+  - Temp file tests should use unique names per test function and clean up with `let _ = std::fs::remove_file()` at end
+  - `CodexAdapter::apply_line()` is a pure static method (no `&self`) — ideal for unit testing without constructing the full adapter
+  - GeminiAdapter `parse_session()` needs the full adapter struct but only uses it for the method call — construct with `ProcessDetector::new()` and empty Mutex maps
+  - All 32 tests run in ~0.00s — no I/O-heavy or async tests, all synchronous with in-memory or tiny temp files
 ---
