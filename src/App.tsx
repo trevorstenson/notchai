@@ -4,14 +4,15 @@ import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { useSessionNotifications } from "./hooks/useSessionNotifications";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
+import { SettingsView } from "./components/SettingsView";
 import { ToolApproval } from "./components/ToolApproval";
 import { NotchArc } from "./components/NotchArc";
 import { calculateSessionCost } from "./lib/pricing";
 import "./App.css";
 
-type ViewState = "hidden" | "collapsed" | "expanded";
+type ViewState = "hidden" | "collapsed" | "expanded" | "settings";
 
-const LEAVE_COLLAPSE_DELAY_MS = 220;
+const LEAVE_COLLAPSE_DELAY_MS = 120;
 
 // Debug behavior is enabled during development only.
 const DEBUG_MODE = import.meta.env.DEV;
@@ -54,7 +55,7 @@ function App() {
   }, []);
 
   const expandPanel = useCallback(() => {
-    if (viewState === "expanded") return;
+    if (viewState === "expanded" || viewState === "settings") return;
     debugLog("[notchai-ui] expandPanel");
     if (animatingTimerRef.current) {
       clearTimeout(animatingTimerRef.current);
@@ -79,6 +80,25 @@ function App() {
     setViewState("collapsed");
   }, [viewState, debugLog]);
 
+  const openSettings = useCallback(() => {
+    debugLog("[notchai-ui] openSettings");
+    clearLeaveTimer();
+    if (animatingTimerRef.current) {
+      clearTimeout(animatingTimerRef.current);
+    }
+    animatingRef.current = true;
+    setViewState("settings");
+    animatingTimerRef.current = setTimeout(() => {
+      animatingRef.current = false;
+      animatingTimerRef.current = null;
+    }, 400);
+  }, [debugLog, clearLeaveTimer]);
+
+  const closeSettings = useCallback(() => {
+    debugLog("[notchai-ui] closeSettings");
+    setViewState("expanded");
+  }, [debugLog]);
+
   const handleIslandMouseEnter = useCallback(() => {
     clearLeaveTimer();
     debugLog("[notchai-ui] mouseenter", { viewState });
@@ -88,8 +108,8 @@ function App() {
   const handleIslandMouseLeave = useCallback(() => {
     clearLeaveTimer();
     debugLog("[notchai-ui] mouseleave", { viewState });
-    // Don't auto-collapse while there are pending approvals
-    if (hasPendingApprovals) return;
+    // Don't auto-collapse while there are pending approvals or settings is open
+    if (hasPendingApprovals || viewState === "settings") return;
     leaveTimerRef.current = setTimeout(() => {
       collapsePanel();
       leaveTimerRef.current = null;
@@ -110,8 +130,9 @@ function App() {
       expandPanel();
     });
     const unlistenClose = listen("close-panel", () => {
-      // Don't collapse while there are pending approvals
+      // Don't collapse while there are pending approvals or settings is open
       if (hasPendingApprovals) return;
+      if (viewState === "settings") return;
       clearLeaveTimer();
       collapsePanel();
     });
@@ -120,50 +141,101 @@ function App() {
       unlistenOpen.then((fn) => fn());
       unlistenClose.then((fn) => fn());
     };
-  }, [clearLeaveTimer, collapsePanel, expandPanel, hasPendingApprovals]);
+  }, [clearLeaveTimer, collapsePanel, expandPanel, hasPendingApprovals, viewState]);
 
   const handleSessionOpened = useCallback(() => {
     clearLeaveTimer();
     collapsePanel();
   }, [clearLeaveTimer, collapsePanel]);
 
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY });
+    },
+    []
+  );
+
+  const handleContextMenuClose = useCallback(() => {
+    setContextMenu(null);
+  }, []);
+
+  const handleContextMenuSettings = useCallback(() => {
+    setContextMenu(null);
+    openSettings();
+  }, [openSettings]);
+
+  // Determine island CSS class — settings uses expanded dimensions
+  const islandSizeClass =
+    viewState === "settings" ? "island--expanded" : `island--${viewState}`;
+
   return (
-    <div className={`notch-root notch-root--${viewState}`}>
+    <div
+      className={`notch-root notch-root--${viewState === "settings" ? "expanded" : viewState}`}
+      onClick={contextMenu ? handleContextMenuClose : undefined}
+    >
       {notchInfo && activeSessions.length > 0 && (
         <NotchArc
           sessions={activeSessions}
           notchInfo={notchInfo}
-          viewState={viewState}
+          viewState={viewState === "settings" ? "expanded" : viewState}
         />
       )}
       <div className="island-wrapper">
         <div
-          className={`island island--${viewState}`}
+          className={`island ${islandSizeClass}`}
           onMouseEnter={handleIslandMouseEnter}
           onMouseLeave={handleIslandMouseLeave}
+          onContextMenu={handleContextMenu}
         >
           {viewState !== "hidden" && (
             <>
-              <CollapsedView
-                sessions={sessions}
-                operatingCount={operatingCount}
-                totalCost={totalCost}
-                pendingApprovalCount={pendingApprovals.length}
-              />
-              {hasPendingApprovals && (
+              {viewState !== "settings" && (
+                <CollapsedView
+                  sessions={sessions}
+                  operatingCount={operatingCount}
+                  totalCost={totalCost}
+                  pendingApprovalCount={pendingApprovals.length}
+                />
+              )}
+              {hasPendingApprovals && viewState !== "settings" && (
                 <ToolApproval
                   pendingApprovals={pendingApprovals}
                   respondToApproval={respondToApproval}
                 />
               )}
-              <ExpandedView
-                sessions={sessions}
-                onSessionOpened={handleSessionOpened}
-              />
+              {viewState === "settings" ? (
+                <SettingsView onBack={closeSettings} />
+              ) : (
+                <ExpandedView
+                  sessions={sessions}
+                  onSessionOpened={handleSessionOpened}
+                  onOpenSettings={openSettings}
+                />
+              )}
             </>
           )}
         </div>
       </div>
+
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            className="context-menu-item"
+            onClick={handleContextMenuSettings}
+          >
+            Settings
+          </button>
+        </div>
+      )}
     </div>
   );
 }
