@@ -6,9 +6,10 @@ interface CollapsedViewProps {
   sessions: AgentSession[];
   operatingCount: number;
   totalCost: number;
+  pendingApprovalCount?: number;
 }
 
-export function CollapsedView({ sessions, operatingCount, totalCost }: CollapsedViewProps) {
+export function CollapsedView({ sessions, operatingCount, totalCost, pendingApprovalCount = 0 }: CollapsedViewProps) {
   const activeSessions = sessions.filter((s) => s.status !== "completed");
   const waitingCount = sessions.filter((s) => s.status === "waitingForInput").length;
   const visibleSessions = activeSessions.length > 0 ? activeSessions : sessions;
@@ -20,7 +21,11 @@ export function CollapsedView({ sessions, operatingCount, totalCost }: Collapsed
           <StatusDot key={session.id} status={session.status} size={7} />
         ))}
       </div>
-      {waitingCount > 0 ? (
+      {pendingApprovalCount > 0 ? (
+        <span className="collapsed-count collapsed-count--approval">
+          {pendingApprovalCount} needs approval
+        </span>
+      ) : waitingCount > 0 ? (
         <span className="collapsed-count collapsed-count--waiting">
           {waitingCount} needs action
         </span>

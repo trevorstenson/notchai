@@ -4,6 +4,7 @@ import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { useSessionNotifications } from "./hooks/useSessionNotifications";
 import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
+import { ToolApproval } from "./components/ToolApproval";
 import { NotchArc } from "./components/NotchArc";
 import { calculateSessionCost } from "./lib/pricing";
 import "./App.css";
@@ -21,9 +22,11 @@ function App() {
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { sessions, activeSessions, operatingCount, notchInfo } =
+  const { sessions, activeSessions, operatingCount, notchInfo, pendingApprovals, respondToApproval } =
     useAgentMonitor(3000, animatingRef);
   useSessionNotifications(sessions);
+
+  const hasPendingApprovals = pendingApprovals.length > 0;
 
   const totalCost = useMemo(() => {
     const todayStart = new Date();
@@ -85,11 +88,21 @@ function App() {
   const handleIslandMouseLeave = useCallback(() => {
     clearLeaveTimer();
     debugLog("[notchai-ui] mouseleave", { viewState });
+    // Don't auto-collapse while there are pending approvals
+    if (hasPendingApprovals) return;
     leaveTimerRef.current = setTimeout(() => {
       collapsePanel();
       leaveTimerRef.current = null;
     }, LEAVE_COLLAPSE_DELAY_MS);
-  }, [clearLeaveTimer, collapsePanel, debugLog, viewState]);
+  }, [clearLeaveTimer, collapsePanel, debugLog, viewState, hasPendingApprovals]);
+
+  // Auto-expand when pending approvals arrive, prevent collapse via close-panel
+  useEffect(() => {
+    if (hasPendingApprovals) {
+      clearLeaveTimer();
+      expandPanel();
+    }
+  }, [hasPendingApprovals, clearLeaveTimer, expandPanel]);
 
   useEffect(() => {
     const unlistenOpen = listen("open-panel", () => {
@@ -97,6 +110,8 @@ function App() {
       expandPanel();
     });
     const unlistenClose = listen("close-panel", () => {
+      // Don't collapse while there are pending approvals
+      if (hasPendingApprovals) return;
       clearLeaveTimer();
       collapsePanel();
     });
@@ -105,7 +120,7 @@ function App() {
       unlistenOpen.then((fn) => fn());
       unlistenClose.then((fn) => fn());
     };
-  }, [clearLeaveTimer, collapsePanel, expandPanel]);
+  }, [clearLeaveTimer, collapsePanel, expandPanel, hasPendingApprovals]);
 
   const handleSessionOpened = useCallback(() => {
     clearLeaveTimer();
@@ -133,7 +148,14 @@ function App() {
                 sessions={sessions}
                 operatingCount={operatingCount}
                 totalCost={totalCost}
+                pendingApprovalCount={pendingApprovals.length}
               />
+              {hasPendingApprovals && (
+                <ToolApproval
+                  pendingApprovals={pendingApprovals}
+                  respondToApproval={respondToApproval}
+                />
+              )}
               <ExpandedView
                 sessions={sessions}
                 onSessionOpened={handleSessionOpened}

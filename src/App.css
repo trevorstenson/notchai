@@ -147,6 +147,11 @@ body {
   text-shadow: 0 0 6px rgba(123, 97, 255, 0.45);
 }
 
+.collapsed-count--approval {
+  color: #FF8C00;
+  text-shadow: 0 0 6px rgba(255, 140, 0, 0.45);
+}
+
 .collapsed-empty {
   font-size: 12px;
   font-weight: 500;
@@ -165,6 +170,20 @@ body {
 .status-dot--pulse {
   animation: pulse 2s ease-in-out infinite;
   will-change: transform, opacity;
+}
+
+.status-dot--blink {
+  animation: dotBlink 0.7s ease-in-out infinite;
+  will-change: opacity;
+}
+
+@keyframes dotBlink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 
 @keyframes pulse {
@@ -429,6 +448,10 @@ body {
 }
 .arc-segment--waitingForInput {
   animation: arcBlink 1.4s ease-in-out infinite;
+}
+.arc-segment--waitingForApproval {
+  animation: arcBlink 0.7s ease-in-out infinite;
+  filter: drop-shadow(0 0 3px #FF8C00);
 }
 .arc-segment--idle {
   opacity: 0.45;
