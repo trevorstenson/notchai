@@ -22,6 +22,7 @@ use models::{AgentSession, NotchInfo};
 use monitor::AgentMonitor;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
+use crate::hook_models::PermissionDecision;
 use crate::process::ProcessDetector;
 
 #[cfg(target_os = "macos")]
@@ -204,6 +205,49 @@ fn resume_session(session_id: String, path: String) -> Result<(), String> {
     {
         Err("resume_session is currently only implemented on macOS".to_string())
     }
+}
+
+#[tauri::command]
+async fn respond_to_approval(
+    request_id: String,
+    decision: String,
+    reason: Option<String>,
+) -> Result<(), String> {
+    let server = hook_server::get_server().ok_or("Hook server not running")?;
+    server
+        .respond(
+            &request_id,
+            PermissionDecision {
+                decision,
+                reason,
+            },
+        )
+        .await
+}
+
+#[tauri::command]
+fn toggle_hooks_enabled(enabled: bool) -> Result<(), String> {
+    if enabled {
+        // Resolve source script from the known install destination
+        // (the script is already installed at ~/.claude/hooks/notchai-hook.py,
+        //  but we install from the resources dir — use the bundled copy)
+        let source = dirs::home_dir()
+            .map(|h| h.join(".claude").join("hooks").join("notchai-hook.py"))
+            .ok_or("Cannot determine home directory")?;
+        // If the script already exists, use it as source (reinstall in-place)
+        // Otherwise, this is a fresh enable — try the resources fallback
+        if source.exists() {
+            hook_installer::install_hooks(&source)?;
+        }
+    } else {
+        hook_installer::uninstall_hooks()?;
+    }
+    hook_installer::set_hooks_enabled(enabled)
+}
+
+#[tauri::command]
+fn get_hooks_enabled() -> bool {
+    hook_installer::get_hooks_enabled()
 }
 
 #[cfg(target_os = "macos")]
@@ -764,6 +808,22 @@ pub fn run() {
             ])),
         })
         .setup(|app| {
+            // Install hooks if enabled and spawn the socket server
+            let app_handle = app.handle().clone();
+            if let Some(resource_path) = app.path().resolve("resources/notchai-hook.py", tauri::path::BaseDirectory::Resource).ok() {
+                if let Err(e) = hook_installer::install_hooks_if_enabled(&resource_path) {
+                    eprintln!("[hooks] install failed: {}", e);
+                }
+            } else {
+                eprintln!("[hooks] could not resolve notchai-hook.py resource path");
+            }
+
+            // Spawn the hook socket server as a tokio task
+            let server_handle = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                hook_server::start(server_handle).await;
+            });
+
             let window = app.get_webview_window("main").unwrap();
 
             // Detect notch and position an invisible hover zone over it.
@@ -832,8 +892,17 @@ pub fn run() {
             get_sessions,
             get_notch_info,
             open_session_location,
-            resume_session
+            resume_session,
+            respond_to_approval,
+            toggle_hooks_enabled,
+            get_hooks_enabled
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Clean up the Unix socket on app exit
+                let _ = std::fs::remove_file("/tmp/notchai.sock");
+            }
+        });
 }

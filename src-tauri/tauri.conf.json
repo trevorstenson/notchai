@@ -41,6 +41,9 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "../resources/notchai-hook.py"
+    ],
     "macOS": {
       "infoPlist": "Info.plist"
     }
