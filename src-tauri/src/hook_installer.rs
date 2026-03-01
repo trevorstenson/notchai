@@ -384,8 +384,22 @@ pub fn get_selected_screen() -> Option<usize> {
         .map(|v| v as usize)
 }
 
-/// Set the selected_screen in ~/.notchai/config.json.
-pub fn set_selected_screen(index: Option<usize>) -> Result<(), String> {
+/// Read the selected_screen_name from ~/.notchai/config.json.
+pub fn get_selected_screen_name() -> Option<String> {
+    let config_path = notchai_config_path()?;
+    if !config_path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&config_path).ok()?;
+    let config: Value = serde_json::from_str(&content).ok()?;
+    config
+        .get("selected_screen_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Set the selected_screen and selected_screen_name in ~/.notchai/config.json.
+pub fn set_selected_screen(index: Option<usize>, name: Option<&str>) -> Result<(), String> {
     let config_path = notchai_config_path().ok_or("Cannot determine home directory")?;
 
     let mut config: Value = if config_path.exists() {
@@ -405,6 +419,10 @@ pub fn set_selected_screen(index: Option<usize>) -> Result<(), String> {
         match index {
             Some(i) => obj.insert("selected_screen".to_string(), json!(i)),
             None => obj.insert("selected_screen".to_string(), Value::Null),
+        };
+        match name {
+            Some(n) => obj.insert("selected_screen_name".to_string(), json!(n)),
+            None => obj.insert("selected_screen_name".to_string(), Value::Null),
         };
     }
 
