@@ -8,6 +8,10 @@
 - Quality checks: `npx tsc --noEmit` for TS, `cargo check` for Rust (pre-existing objc macro warnings are expected)
 - Claude Code settings.json hooks format: `{"hooks": {"EventType": [{"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/script.py"}]}]}}`
 - Hook installer uses `NOTCHAI_HOOK_MARKER = "notchai-hook.py"` to identify our entries for idempotent install/uninstall
+- Codex CLI config is TOML at `~/.codex/config.toml`; notify uses `notify = ["command", "arg1"]` array format
+- Codex hook installer uses `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` for idempotent install; script copied to `~/.notchai/hooks/`
+- `codex_hooks_enabled` flag stored alongside `hooks_enabled` in `~/.notchai/config.json` (defaults to true)
+- `map_hook_to_normalized_event()` now takes `agent` param; determines AgentType and EventSource dynamically (codex→Codex+Notify, default→Claude+Hook)
 - Notchai config lives at `~/.notchai/config.json` with `hooks_enabled` boolean flag (default true)
 - `install_hooks(source_script: &Path)` takes the resolved bundle resource path as input
 - Hook server uses `tokio::sync::Mutex` (not `std::sync::Mutex`) for the pending map since it's held across `.await` points
@@ -127,4 +131,41 @@
   - The `event_type: "task_complete"` is a Codex-specific event type not yet mapped in `map_hook_to_normalized_event()` — US-019 will add this mapping
   - Bash `date -u +"%Y-%m-%dT%H:%M:%SZ"` produces ISO 8601 UTC timestamp matching the Python hook's format
   - socat `UNIX-CONNECT:` is fire-and-forget (no response expected) which is appropriate for notify events (unlike Claude PermissionRequest which blocks)
+---
+
+## 2026-03-01 - US-019
+- Added `install_codex_hooks()`, `uninstall_codex_hooks()`, `install_codex_hooks_if_enabled()` to hook_installer.rs
+- Codex installer reads/modifies `~/.codex/config.toml` to set `notify = ["/path/to/notchai-codex-notify.sh"]`
+- Script copied to `~/.notchai/hooks/notchai-codex-notify.sh` (not in .codex dir to keep notchai files together)
+- Installation is idempotent via `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` string check in config content
+- Uninstall replaces notify line with `notify = []` and deletes the copied script
+- Added `codex_hooks_enabled` flag to `~/.notchai/config.json` (default true) with get/set functions
+- Extended `map_hook_to_normalized_event()` with `agent` parameter: dynamically determines AgentType (codex→Codex) and EventSource (codex→Notify)
+- Added `task_complete` event type mapping → `NormalizedEvent::TaskCompleted`
+- Added `resolve_codex_notify_script()` for Tauri resource + dev fallback resolution
+- Added `toggle_codex_hooks_enabled` and `get_codex_hooks_enabled` Tauri commands
+- Updated `SettingsPayload`, `get_settings`, and `save_settings` to include `codex_hooks_enabled`
+- Wired Codex hook installation into lib.rs setup block alongside Claude hooks
+- Registered new commands in invoke_handler
+- Files changed: src-tauri/src/hook_installer.rs, src-tauri/src/hook_server.rs, src-tauri/src/lib.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - Codex CLI config.toml uses `notify = ["command", "arg1"]` array format (not `notify.command` nested table)
+  - String-based TOML editing avoids adding `toml` crate dependency; works well for simple key replacement but won't handle multi-line arrays
+  - The `agent` field in HookMessage is the key discriminator for multi-agent event routing: "codex"→Codex, "gemini"→Gemini, default→Claude
+  - `EventSource::Notify` is used for Codex events (fire-and-forget from notify script) vs `EventSource::Hook` for Claude (bidirectional with permission round-trips)
+  - `save_settings` Tauri command now takes `codex_hooks_enabled` as an additional parameter — frontend callers must be updated (US-020)
+---
+
+## 2026-03-01 - US-020
+- Added Codex hooks toggle to SettingsView alongside existing Claude hooks toggle
+- Added `codexHooksEnabled` state, loaded from `get_settings` on mount
+- Toggle calls `toggle_codex_hooks_enabled` Tauri command (already existed from US-019)
+- Updated labels: "Claude Hooks" and "Codex Hooks" clearly distinguish the two toggles
+- Updated `save_settings` call in sound toggle handler to include `codexHooksEnabled` parameter
+- Files changed: src/components/SettingsView.tsx, tasks/prd.json
+- **Learnings for future iterations:**
+  - The Rust backend (toggle_codex_hooks_enabled, get_codex_hooks_enabled) was already wired up in US-019 — the frontend just needed to consume it
+  - Both hooks toggles share the same `saving` mutex to prevent concurrent toggle operations
+  - `save_settings` requires all settings fields (hooksEnabled, codexHooksEnabled, selectedScreen, soundEnabled) — omitting one will cause a Tauri invoke error
+  - The toggle follows the exact same pattern as Claude hooks toggle: optimistic update after successful invoke, not before
 ---
