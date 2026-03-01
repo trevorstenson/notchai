@@ -1,11 +1,13 @@
 mod adapter;
 mod adapters;
+mod event_bus;
 mod hook_installer;
 mod hook_models;
 mod hook_server;
 mod models;
 mod monitor;
 mod notch;
+mod otel_server;
 mod process;
 mod scanner;
 mod transcript;
@@ -52,6 +54,7 @@ struct AppState {
 #[serde(rename_all = "camelCase")]
 struct SettingsPayload {
     hooks_enabled: bool,
+    codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
 }
@@ -266,6 +269,27 @@ fn resolve_hook_script(app: &tauri::AppHandle) -> Option<PathBuf> {
     None
 }
 
+/// Resolve the bundled notchai-codex-notify.sh, trying Tauri resource paths and a dev-mode fallback.
+fn resolve_codex_notify_script(app: &tauri::AppHandle) -> Option<PathBuf> {
+    for name in &[
+        "resources/notchai-codex-notify.sh",
+        "notchai-codex-notify.sh",
+    ] {
+        if let Ok(p) = app.path().resolve(*name, tauri::path::BaseDirectory::Resource) {
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("resources").join("notchai-codex-notify.sh"))?;
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    None
+}
+
 #[tauri::command]
 fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
     if enabled {
@@ -281,6 +305,23 @@ fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), Stri
 #[tauri::command]
 fn get_hooks_enabled() -> bool {
     hook_installer::get_hooks_enabled()
+}
+
+#[tauri::command]
+fn toggle_codex_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        let resource_path = resolve_codex_notify_script(&app)
+            .ok_or("Cannot find notchai-codex-notify.sh in app bundle or project resources")?;
+        hook_installer::install_codex_hooks(&resource_path)?;
+    } else {
+        hook_installer::uninstall_codex_hooks()?;
+    }
+    hook_installer::set_codex_hooks_enabled(enabled)
+}
+
+#[tauri::command]
+fn get_codex_hooks_enabled() -> bool {
+    hook_installer::get_codex_hooks_enabled()
 }
 
 #[tauri::command]
@@ -369,9 +410,35 @@ fn list_screens() -> Vec<ScreenInfo> {
     notch::list_screens()
 }
 
+/// Return a usable selected screen index.
+/// Resolves by saved screen name first (indexes can shift).
+/// Returns None (auto-detect) if the saved monitor is no longer connected.
+fn get_valid_selected_screen() -> Option<usize> {
+    let saved_index = hook_installer::get_selected_screen();
+    let saved_name = hook_installer::get_selected_screen_name();
+    let resolved_index = notch::resolve_screen_index(saved_index, saved_name.as_deref());
+
+    if resolved_index != saved_index {
+        if let Err(e) = hook_installer::set_selected_screen(resolved_index, saved_name.as_deref()) {
+            eprintln!(
+                "[settings] failed to persist resolved selected_screen {:?} (was {:?}): {}",
+                resolved_index, saved_index, e
+            );
+        }
+    }
+
+    resolved_index
+}
+
+/// Resolve the screen index used for window placement.
+/// Explicit user selection wins; otherwise prefer primary display (index 0).
+fn effective_screen_index_for_placement(selected_screen: Option<usize>) -> Option<usize> {
+    selected_screen.or_else(|| notch::list_screens().first().map(|screen| screen.index))
+}
+
 #[tauri::command]
 fn get_selected_screen() -> Option<usize> {
-    hook_installer::get_selected_screen()
+    get_valid_selected_screen()
 }
 
 #[tauri::command]
@@ -394,7 +461,8 @@ fn set_selected_screen(
 fn get_settings() -> SettingsPayload {
     SettingsPayload {
         hooks_enabled: hook_installer::get_hooks_enabled(),
-        selected_screen: hook_installer::get_selected_screen(),
+        codex_hooks_enabled: hook_installer::get_codex_hooks_enabled(),
+        selected_screen: get_valid_selected_screen(),
         sound_enabled: hook_installer::get_sound_enabled(),
     }
 }
@@ -402,6 +470,7 @@ fn get_settings() -> SettingsPayload {
 #[tauri::command]
 fn save_settings(
     hooks_enabled: bool,
+    codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
     app: tauri::AppHandle,
@@ -419,8 +488,21 @@ fn save_settings(
         hook_installer::set_hooks_enabled(hooks_enabled)?;
     }
 
+    // Handle Codex hooks toggle
+    let current_codex_hooks = hook_installer::get_codex_hooks_enabled();
+    if codex_hooks_enabled != current_codex_hooks {
+        if codex_hooks_enabled {
+            let resource_path = resolve_codex_notify_script(&app)
+                .ok_or("Cannot find notchai-codex-notify.sh in app bundle or project resources")?;
+            hook_installer::install_codex_hooks(&resource_path)?;
+        } else {
+            hook_installer::uninstall_codex_hooks()?;
+        }
+        hook_installer::set_codex_hooks_enabled(codex_hooks_enabled)?;
+    }
+
     // Handle screen selection
-    let current_screen = hook_installer::get_selected_screen();
+    let current_screen = get_valid_selected_screen();
     if selected_screen != current_screen {
         let name = selected_screen.and_then(|i| {
             notch::list_screens()
@@ -447,7 +529,8 @@ fn reposition_window(
         return;
     };
 
-    let detection = notch::detect_notch_on_screen(screen_index);
+    let effective_screen = effective_screen_index_for_placement(screen_index);
+    let detection = notch::detect_notch_on_screen(effective_screen);
     let notch = &detection.info;
     let hover_width = (notch.width + 340.0).max(540.0);
     let hover_height = 420.0;
@@ -1164,26 +1247,66 @@ pub fn run() {
             let app_handle = app.handle().clone();
             if let Some(resource_path) = resolve_hook_script(app.handle()) {
                 if let Err(e) = hook_installer::install_hooks_if_enabled(&resource_path) {
-                    eprintln!("[hooks] install failed: {}", e);
+                    eprintln!("[hooks] Claude hooks install failed: {}", e);
                 }
             } else {
                 eprintln!("[hooks] could not resolve notchai-hook.py resource path");
             }
 
-            // Spawn the hook socket server as a tokio task
+            // Install Codex notify hooks if enabled
+            if let Some(codex_script_path) = resolve_codex_notify_script(app.handle()) {
+                if let Err(e) = hook_installer::install_codex_hooks_if_enabled(&codex_script_path) {
+                    eprintln!("[hooks] Codex hooks install failed: {}", e);
+                }
+            } else {
+                eprintln!("[hooks] could not resolve notchai-codex-notify.sh resource path");
+            }
+
+            // Create the event bus for unified event pipeline
+            let event_bus = event_bus::EventBus::new();
+
+            // Spawn the hook socket server as a tokio task with EventBus
             let server_handle = app_handle.clone();
+            let hook_bus = event_bus.clone();
             tauri::async_runtime::spawn(async move {
-                hook_server::start(server_handle).await;
+                hook_server::start(server_handle, hook_bus).await;
             });
+
+            // Spawn the OTEL HTTP/protobuf ingestion server with EventBus
+            let otel_bus = event_bus.clone();
+            tauri::async_runtime::spawn(async move {
+                otel_server::start(otel_bus).await;
+            });
+
+            // Spawn the EventBus → Tauri bridge: forwards NormalizedEvent to the frontend
+            {
+                let bridge_handle = app_handle.clone();
+                let mut rx = event_bus.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match rx.recv().await {
+                            Ok(event) => {
+                                let _ = bridge_handle.emit("event-bus:normalized-event", &event);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                                eprintln!("[event-bus] bridge lagged, skipped {} events", n);
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                                eprintln!("[event-bus] channel closed, bridge stopping");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
 
             let window = app.get_webview_window("main").unwrap();
 
             // Detect notch and position an invisible hover zone over it.
-            // Respects saved screen selection; resolves by name first (indexes can shift).
-            let saved_index = hook_installer::get_selected_screen();
-            let saved_name = hook_installer::get_selected_screen_name();
-            let selected_screen = notch::resolve_screen_index(saved_index, saved_name.as_deref());
-            let detection = notch::detect_notch_on_screen(selected_screen);
+            // Respects saved screen selection; auto-detects if none is set.
+            let selected_screen = get_valid_selected_screen();
+            let effective_screen = effective_screen_index_for_placement(selected_screen);
+            let detection = notch::detect_notch_on_screen(effective_screen);
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.
@@ -1254,6 +1377,8 @@ pub fn run() {
             respond_to_approval,
             toggle_hooks_enabled,
             get_hooks_enabled,
+            toggle_codex_hooks_enabled,
+            get_codex_hooks_enabled,
             get_session_tool_calls,
             play_sound,
             play_haptic,

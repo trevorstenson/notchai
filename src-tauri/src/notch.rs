@@ -270,8 +270,10 @@ pub fn detect_notch_on_screen(screen_index: Option<usize>) -> NotchDetection {
         let screens: *mut Object = msg_send![ns_screen_class, screens];
         let count: usize = msg_send![screens, count];
 
+        // If the saved display index is stale (monitor removed/reordered),
+        // fall back to normal auto-detection instead of hardcoded coordinates.
         if idx >= count {
-            return fallback();
+            return detect_notch();
         }
 
         let primary_screen: *mut Object = msg_send![screens, objectAtIndex: 0usize];
@@ -280,7 +282,7 @@ pub fn detect_notch_on_screen(screen_index: Option<usize>) -> NotchDetection {
 
         let screen: *mut Object = msg_send![screens, objectAtIndex: idx];
         if screen.is_null() {
-            return fallback();
+            return detect_notch();
         }
 
         let frame: CGRect = msg_send![screen, frame];

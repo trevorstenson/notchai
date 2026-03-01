@@ -81,6 +81,11 @@ def build_hook_message(hook_input):
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
+    # Notification events carry title/message instead of tool_name/tool_input
+    if event_type == "Notification":
+        msg["title"] = hook_input.get("title")
+        msg["message"] = hook_input.get("message")
+
     # Forward permission_suggestions so the UI knows if "Always Allow" is available
     permission_suggestions = hook_input.get("permission_suggestions")
     if permission_suggestions:

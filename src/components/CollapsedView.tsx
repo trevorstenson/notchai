@@ -7,9 +7,10 @@ interface CollapsedViewProps {
   operatingCount: number;
   totalCost: number;
   pendingApprovalCount?: number;
+  notificationText?: string | null;
 }
 
-export function CollapsedView({ sessions, operatingCount, totalCost, pendingApprovalCount = 0 }: CollapsedViewProps) {
+export function CollapsedView({ sessions, operatingCount, totalCost, pendingApprovalCount = 0, notificationText }: CollapsedViewProps) {
   const activeSessions = sessions.filter((s) => s.status !== "completed");
   const waitingCount = sessions.filter((s) => s.status === "waitingForInput").length;
   const visibleSessions = activeSessions.length > 0 ? activeSessions : sessions;
@@ -21,7 +22,11 @@ export function CollapsedView({ sessions, operatingCount, totalCost, pendingAppr
           <StatusDot key={session.id} status={session.status} size={7} />
         ))}
       </div>
-      {pendingApprovalCount > 0 ? (
+      {notificationText ? (
+        <span className="collapsed-count collapsed-count--notification">
+          {notificationText}
+        </span>
+      ) : pendingApprovalCount > 0 ? (
         <span className="collapsed-count collapsed-count--approval">
           {pendingApprovalCount} needs approval
         </span>
@@ -38,7 +43,7 @@ export function CollapsedView({ sessions, operatingCount, totalCost, pendingAppr
       ) : (
         <span className="collapsed-empty">notchai</span>
       )}
-      {totalCost > 0 && (
+      {totalCost > 0 && !notificationText && (
         <>
           <span className="collapsed-sep">&middot;</span>
           <span className="collapsed-cost">{formatCost(totalCost)}</span>

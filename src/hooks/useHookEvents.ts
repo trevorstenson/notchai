@@ -5,6 +5,7 @@ import type {
   HookStatusEvent,
   PermissionRequestEvent,
   HookSessionState,
+  NotificationEvent,
 } from "../types/hooks";
 import type { AgentStatus } from "../types";
 
@@ -14,6 +15,8 @@ function hookEventToStatus(eventType: string): AgentStatus | null {
     case "UserPromptSubmit":
     case "PreToolUse":
     case "PostToolUse":
+    case "SessionStart":
+    case "Notification":
       return "operating";
     case "Stop":
     case "SubagentStop":
@@ -22,8 +25,25 @@ function hookEventToStatus(eventType: string): AgentStatus | null {
     case "PermissionRequest":
       return "waitingForApproval";
     default:
-      return null;
+      // Unknown/new event types treated as operating (agent is active)
+      return "operating";
   }
+}
+
+/** Duration (ms) to show notification text in collapsed view before auto-clearing. */
+const NOTIFICATION_DISPLAY_MS = 4000;
+
+/** TTL (ms) for pending approvals — matches backend APPROVAL_TTL_SECS (5 minutes). */
+const APPROVAL_TTL_MS = 5 * 60 * 1000;
+
+/** Filter out pending approvals older than APPROVAL_TTL_MS. */
+function filterStaleApprovals(
+  approvals: PermissionRequestEvent[],
+): PermissionRequestEvent[] {
+  const cutoff = Date.now() - APPROVAL_TTL_MS;
+  return approvals.filter(
+    (a) => new Date(a.timestamp).getTime() > cutoff,
+  );
 }
 
 export function useHookEvents() {
@@ -33,6 +53,10 @@ export function useHookEvents() {
   const [pendingApprovals, setPendingApprovals] = useState<
     PermissionRequestEvent[]
   >([]);
+  const [notificationText, setNotificationText] = useState<string | null>(null);
+  const notificationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   // Track a callback that the consumer can set for "SessionStart triggers refresh"
   const onSessionStartRef = useRef<(() => void) | null>(null);
@@ -77,7 +101,9 @@ export function useHookEvents() {
           });
           return next;
         });
-        setPendingApprovals((prev) => [...prev, payload]);
+        setPendingApprovals((prev) =>
+          filterStaleApprovals([...prev, payload]),
+        );
       },
     );
 
@@ -87,7 +113,9 @@ export function useHookEvents() {
       (event) => {
         const cancelledId = event.payload;
         setPendingApprovals((prev) =>
-          prev.filter((p) => p.requestId !== cancelledId),
+          filterStaleApprovals(
+            prev.filter((p) => p.requestId !== cancelledId),
+          ),
         );
         setHookStates((prev) => {
           const next = new Map(prev);
@@ -101,10 +129,31 @@ export function useHookEvents() {
       },
     );
 
+    // Listen for Notification events to show brief text in collapsed view
+    const unlistenNotification = listen<NotificationEvent>(
+      "hook:notification",
+      (event) => {
+        const { title } = event.payload;
+        setNotificationText(title);
+        // Clear any existing timer
+        if (notificationTimerRef.current) {
+          clearTimeout(notificationTimerRef.current);
+        }
+        notificationTimerRef.current = setTimeout(() => {
+          setNotificationText(null);
+          notificationTimerRef.current = null;
+        }, NOTIFICATION_DISPLAY_MS);
+      },
+    );
+
     return () => {
       unlistenStatus.then((fn) => fn());
       unlistenPermission.then((fn) => fn());
       unlistenCancelled.then((fn) => fn());
+      unlistenNotification.then((fn) => fn());
+      if (notificationTimerRef.current) {
+        clearTimeout(notificationTimerRef.current);
+      }
     };
   }, []);
 
@@ -153,6 +202,7 @@ export function useHookEvents() {
     pendingApprovals,
     respondToApproval,
     setOnSessionStart,
+    notificationText,
   };
 }
 

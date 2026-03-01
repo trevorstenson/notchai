@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, type MutableRefObject } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentSession, NotchInfo } from "../types";
 import { useHookEvents, mergeHookStatus } from "./useHookEvents";
+import { useEventBus, mergeEventBusStatus } from "./useEventBus";
 
 export function useAgentMonitor(
   pollIntervalMs = 3000,
@@ -16,7 +17,10 @@ export function useAgentMonitor(
     pendingApprovals,
     respondToApproval,
     setOnSessionStart,
+    notificationText,
   } = useHookEvents();
+
+  const { eventBusStates } = useEventBus();
 
   const fetchSessions = useCallback(async () => {
     // Skip updates during animation to avoid mid-animation re-renders
@@ -55,13 +59,23 @@ export function useAgentMonitor(
     return () => clearInterval(interval);
   }, [fetchSessions, fetchNotchInfo, pollIntervalMs]);
 
-  // Merge hook-derived status into polled sessions
+  // Merge hook-derived and event-bus status into polled sessions
+  // Priority: event-bus > hooks > poll
   const mergedSessions = sessions.map((s) => {
-    if (s.agentType !== "claude") return s;
-    const hookState = hookStates.get(s.id);
-    const mergedStatus = mergeHookStatus(s.status, hookState);
-    if (mergedStatus === s.status) return s;
-    return { ...s, status: mergedStatus };
+    let status = s.status;
+
+    // First layer: hook status (claude-only, same as before)
+    if (s.agentType === "claude") {
+      const hookState = hookStates.get(s.id);
+      status = mergeHookStatus(status, hookState);
+    }
+
+    // Second layer: event-bus status (all agent types, highest priority)
+    const ebState = eventBusStates.get(s.id);
+    status = mergeEventBusStatus(status, ebState);
+
+    if (status === s.status) return s;
+    return { ...s, status };
   });
 
   const activeSessions = mergedSessions.filter((s) => s.status !== "completed");
@@ -78,5 +92,6 @@ export function useAgentMonitor(
     refresh: fetchSessions,
     pendingApprovals,
     respondToApproval,
+    notificationText,
   };
 }

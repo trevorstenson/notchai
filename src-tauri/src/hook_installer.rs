@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// === Claude Code hooks ===
+
 /// The 9 Claude Code hook event types we register for.
 const HOOK_EVENT_TYPES: &[&str] = &[
     "PreToolUse",
@@ -422,6 +424,191 @@ pub fn set_selected_screen(index: Option<usize>, name: Option<&str>) -> Result<(
             Some(n) => obj.insert("selected_screen_name".to_string(), json!(n)),
             None => obj.insert("selected_screen_name".to_string(), Value::Null),
         };
+    }
+
+    let output = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, output)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+
+    Ok(())
+}
+
+// === Codex notify hooks ===
+
+/// Marker used to identify our entry in Codex config.toml notify.
+const CODEX_NOTIFY_MARKER: &str = "notchai-codex-notify.sh";
+
+/// Path to Codex config.toml.
+fn codex_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".codex").join("config.toml"))
+}
+
+/// Destination path for the installed Codex notify script.
+fn codex_notify_script_dest() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".notchai").join("hooks").join("notchai-codex-notify.sh"))
+}
+
+/// Install Codex notify hooks: copy the script and update ~/.codex/config.toml.
+///
+/// `source_script` is the path to notchai-codex-notify.sh in the app bundle / resources.
+pub fn install_codex_hooks(source_script: &Path) -> Result<(), String> {
+    let config_path = codex_config_path().ok_or("Cannot determine home directory")?;
+    let dest = codex_notify_script_dest().ok_or("Cannot determine home directory")?;
+
+    // Create destination directory and copy script
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create hooks directory: {}", e))?;
+    }
+    fs::copy(source_script, &dest)
+        .map_err(|e| format!("Failed to copy Codex notify script: {}", e))?;
+
+    // Make executable
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&dest, perms)
+            .map_err(|e| format!("Failed to set script permissions: {}", e))?;
+    }
+
+    let script_path = dest.to_string_lossy().to_string();
+
+    // Read or create config.toml
+    let content = if config_path.exists() {
+        fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read Codex config: {}", e))?
+    } else {
+        // Create parent dir if needed
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create .codex directory: {}", e))?;
+        }
+        String::new()
+    };
+
+    // Idempotent: already installed
+    if content.contains(CODEX_NOTIFY_MARKER) {
+        return Ok(());
+    }
+
+    let notify_line = format!("notify = [\"{}\"]", script_path);
+
+    // Replace existing notify line or append
+    let new_content = if content.lines().any(|l| l.trim_start().starts_with("notify")) {
+        content
+            .lines()
+            .map(|line| {
+                if line.trim_start().starts_with("notify") {
+                    notify_line.as_str()
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    } else if content.is_empty() {
+        format!("{}\n", notify_line)
+    } else {
+        format!("{}\n{}\n", content.trim_end(), notify_line)
+    };
+
+    fs::write(&config_path, new_content)
+        .map_err(|e| format!("Failed to write Codex config: {}", e))?;
+
+    Ok(())
+}
+
+/// Remove notify entry from ~/.codex/config.toml and delete the script.
+pub fn uninstall_codex_hooks() -> Result<(), String> {
+    let config_path = codex_config_path().ok_or("Cannot determine home directory")?;
+
+    if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read Codex config: {}", e))?;
+
+        if content.contains(CODEX_NOTIFY_MARKER) {
+            let new_content = content
+                .lines()
+                .map(|line| {
+                    if line.trim_start().starts_with("notify")
+                        && line.contains(CODEX_NOTIFY_MARKER)
+                    {
+                        "notify = []"
+                    } else {
+                        line
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+
+            fs::write(&config_path, new_content)
+                .map_err(|e| format!("Failed to write Codex config: {}", e))?;
+        }
+    }
+
+    // Delete the script file
+    if let Some(dest) = codex_notify_script_dest() {
+        if dest.exists() {
+            fs::remove_file(&dest)
+                .map_err(|e| format!("Failed to delete Codex notify script: {}", e))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if Codex hooks are enabled, then install if so.
+pub fn install_codex_hooks_if_enabled(source_script: &Path) -> Result<(), String> {
+    if get_codex_hooks_enabled() {
+        install_codex_hooks(source_script)
+    } else {
+        Ok(())
+    }
+}
+
+/// Read the codex_hooks_enabled flag from ~/.notchai/config.json. Defaults to true.
+pub fn get_codex_hooks_enabled() -> bool {
+    let Some(config_path) = notchai_config_path() else {
+        return true;
+    };
+    if !config_path.exists() {
+        return true;
+    }
+    let Ok(content) = fs::read_to_string(&config_path) else {
+        return true;
+    };
+    let Ok(config) = serde_json::from_str::<Value>(&content) else {
+        return true;
+    };
+    config
+        .get("codex_hooks_enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// Set the codex_hooks_enabled flag in ~/.notchai/config.json.
+pub fn set_codex_hooks_enabled(enabled: bool) -> Result<(), String> {
+    let config_path = notchai_config_path().ok_or("Cannot determine home directory")?;
+
+    let mut config: Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(json!({}))
+    } else {
+        json!({})
+    };
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert("codex_hooks_enabled".to_string(), json!(enabled));
     }
 
     let output = serde_json::to_string_pretty(&config)

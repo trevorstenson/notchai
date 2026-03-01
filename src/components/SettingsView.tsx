@@ -11,6 +11,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [screens, setScreens] = useState<ScreenInfo[]>([]);
   const [selectedScreen, setSelectedScreen] = useState<number | null>(null);
   const [hooksEnabled, setHooksEnabled] = useState(true);
+  const [codexHooksEnabled, setCodexHooksEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -19,11 +20,13 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     invoke<ScreenInfo[]>("list_screens").then(setScreens).catch(console.error);
     invoke<{
       hooksEnabled: boolean;
+      codexHooksEnabled: boolean;
       selectedScreen: number | null;
       soundEnabled: boolean;
     }>("get_settings")
       .then((settings) => {
         setHooksEnabled(settings.hooksEnabled);
+        setCodexHooksEnabled(settings.codexHooksEnabled);
         setSelectedScreen(settings.selectedScreen);
         setSoundEnabled(settings.soundEnabled);
       })
@@ -74,6 +77,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
   };
 
+  const handleCodexHooksToggle = async () => {
+    if (saving) return;
+    const next = !codexHooksEnabled;
+    setSaving(true);
+    try {
+      await invoke("toggle_codex_hooks_enabled", { enabled: next });
+      setCodexHooksEnabled(next);
+    } catch (err) {
+      console.error("[notchai-ui] toggle_codex_hooks_enabled failed", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSoundToggle = async () => {
     if (saving) return;
     const next = !soundEnabled;
@@ -82,6 +99,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     try {
       await invoke("save_settings", {
         hooksEnabled,
+        codexHooksEnabled,
         selectedScreen,
         soundEnabled: next,
       });
@@ -149,10 +167,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
           <span className="settings-section-label">Hooks</span>
           <div className="settings-toggle-row" onClick={handleHooksToggle}>
             <span className="settings-toggle-label">
-              Enable Claude Code hooks
+              Claude Hooks
             </span>
             <div
               className={`settings-toggle ${hooksEnabled ? "settings-toggle--on" : ""}`}
+            >
+              <div className="settings-toggle-knob" />
+            </div>
+          </div>
+          <div className="settings-toggle-row" onClick={handleCodexHooksToggle}>
+            <span className="settings-toggle-label">
+              Codex Hooks
+            </span>
+            <div
+              className={`settings-toggle ${codexHooksEnabled ? "settings-toggle--on" : ""}`}
             >
               <div className="settings-toggle-knob" />
             </div>

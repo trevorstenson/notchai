@@ -1,0 +1,260 @@
+## Codebase Patterns
+- Claude Code hooks use `hookSpecificOutput` with `hookEventName` for decision control; PermissionRequest uses `decision.behavior` ("allow"/"deny"), PreToolUse uses `permissionDecision`
+- Hook input JSON from Claude Code includes `hook_event_name`, `session_id`, `cwd`, `tool_name`, `tool_input` (object), `tool_use_id`, `transcript_path`, `permission_mode`
+- PermissionRequest hooks do NOT receive `tool_use_id` (unlike PreToolUse) - must cache from PreToolUse if correlation is needed
+- HookMessage struct in hook_models.rs uses snake_case fields; HookStatusPayload/PermissionRequestPayload use camelCase via serde rename
+- The Tauri app uses `src-tauri/` for Rust backend, `src/` for React frontend, and `@tauri-apps/api` for IPC
+- TypeScript types mirror Rust structs with camelCase field names
+- Quality checks: `npx tsc --noEmit` for TS, `cargo check` for Rust (pre-existing objc macro warnings are expected)
+- Claude Code settings.json hooks format: `{"hooks": {"EventType": [{"matcher": "", "hooks": [{"type": "command", "command": "python3 /path/to/script.py"}]}]}}`
+- Hook installer uses `NOTCHAI_HOOK_MARKER = "notchai-hook.py"` to identify our entries for idempotent install/uninstall
+- Codex CLI config is TOML at `~/.codex/config.toml`; notify uses `notify = ["command", "arg1"]` array format
+- Codex adapter uses `std::sync::Mutex` (not tokio) for caches since `get_sessions()` is sync; offsets keyed by file path string
+- Gemini adapter uses mtime-based caching: `HashMap<String, SystemTime>` + `HashMap<String, GeminiSessionData>` for skip-if-unchanged
+- For incremental JSONL reads: `BufReader<&File>` supports both `BufRead` and `Seek` — `seek()` invalidates the internal buffer correctly
+- Codex token_count events report cumulative totals (assigned, not accumulated) — safe for incremental reads since latest value is always correct
+- Unit tests live in `#[cfg(test)] mod tests` within each source file; run with `cargo test` from `src-tauri/`; OTEL Span construction uses `..Default::default()` with helper functions `kv_string`/`kv_int` for attributes
+- Codex hook installer uses `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` for idempotent install; script copied to `~/.notchai/hooks/`
+- `codex_hooks_enabled` flag stored alongside `hooks_enabled` in `~/.notchai/config.json` (defaults to true)
+- `map_hook_to_normalized_event()` now takes `agent` param; determines AgentType and EventSource dynamically (codex→Codex+Notify, default→Claude+Hook)
+- Notchai config lives at `~/.notchai/config.json` with `hooks_enabled` boolean flag (default true)
+- `install_hooks(source_script: &Path)` takes the resolved bundle resource path as input
+- Hook server uses `tokio::sync::Mutex` (not `std::sync::Mutex`) for the pending map since it's held across `.await` points
+- `useAgentMonitor` returns `pendingApprovals` and `respondToApproval` from `useHookEvents` — downstream components should use these for tool approval UI
+- Hook status merging only applies to `claude` agent type sessions; event-bus merging applies to ALL agent types
+- Status merge priority in useAgentMonitor: event-bus > hooks > poll (applied sequentially)
+- Gemini CLI sessions are JSON files at `~/.gemini/tmp/<project_hash>/session-*.json` (respects `GEMINI_CLI_HOME` env var)
+- New adapters need changes in 7 places: models.rs (AgentType enum + structs), adapters/<name>.rs (new), adapters/mod.rs, lib.rs (register), types.ts (AgentType), NotchArc.tsx (AGENT_TYPE_ORDER), pricing.ts
+- `hook_server::get_server()` returns `Option<&'static HookServer>` for Tauri command access; `respond()` is `async`
+- Socket server `start()` is `pub async fn` — must be spawned as a tokio task from Tauri setup
+- Tauri 2 resource path resolution: `app.path().resolve("resources/notchai-hook.py", tauri::path::BaseDirectory::Resource)`
+- Use `tauri::async_runtime::spawn()` to run async tasks from the synchronous setup block
+- For app exit cleanup: use `.build().run(|_app, event| { ... })` pattern instead of `.run(context)` — allows handling `RunEvent::Exit`
+- Tauri commands: `respond_to_approval` (async), `toggle_hooks_enabled`, `get_hooks_enabled`, `get_session_tool_calls` registered in invoke_handler
+- Claude JSONL tool data lives in two places: `message.content[]` ToolUse blocks (assistant entries) and top-level `tool_result` entries — correlate by `tool_use_id`
+- `AgentAdapter::get_tool_calls()` has default empty impl — only Claude and Gemini override it; Codex/Cursor use default
+- `AgentMonitor::get_tool_calls()` tries each adapter and returns first non-empty result — session IDs are unique across adapters
+- CSS `--island-expanded-height` and Rust `hover_height`/`expanded_height` must stay in sync; hover_height >= CSS height to keep mouse in zone
+- Use `e.stopPropagation()` on nested interactive elements inside clickable session rows to prevent parent click handlers from firing
+- Notification hook events from Claude Code carry `title` and `message` fields (not `tool_name`/`tool_input`); Python hook forwards them as separate fields in HookMessage
+- `tauri_plugin_notification::NotificationExt` provides `app_handle.notification().builder().title().body().show()` for macOS native notifications
+- Unknown/new hook event types are published as `NormalizedEvent::StatusChanged(Operating)` — never silently dropped — so the UI always reflects agent activity
+- `hook:notification` Tauri event carries `NotificationPayload { sessionId, title, message, timestamp }` for frontend notification display
+- `useHookEvents` exposes `notificationText` (auto-clears after 4 seconds) for brief notification flash in collapsed view
+- OTEL server uses axum 0.8 with `Router::new().route(path, post(handler)).with_state(event_bus)` pattern; handler takes `(State<EventBus>, HeaderMap, Bytes)` extractors
+- Hook event → NormalizedEvent mapping: PreToolUse→ToolStarted, PostToolUse→ToolCompleted, Stop/SubagentStop/SessionEnd→SessionEnded, SessionStart→SessionStarted, UserPromptSubmit→StatusChanged(Operating); PermissionRequest stays on direct Tauri path
+- EventBus Tauri bridge pattern: `event_bus.subscribe()` returns a broadcast::Receiver, loop with `rx.recv().await` and emit Tauri events; handle `Lagged` by logging and continuing, `Closed` by breaking
+- Approval dedup uses (session_id, tool_name, tool_use_id) composite key; tool_use_id comes from PreToolUse cache since PermissionRequest doesn't include it
+- `APPROVAL_TTL_SECS = 300` (5 min) — pending approvals expire via tokio::time::sleep branch in select!; TTL sends deny response + `hook:permission-cancelled` event
+- Frontend `filterStaleApprovals()` runs on every `setPendingApprovals` update as a safety net — not timer-based
+- opentelemetry-proto 0.28 with features `["gen-tonic-messages", "trace"]` provides protobuf message types at `opentelemetry_proto::tonic::collector::trace::v1::*`
+- OTEL span attribute values use `opentelemetry_proto::tonic::common::v1::any_value::Value` enum — extract string with `Value::StringValue(s)`
+- For graceful port-already-in-use: `match tokio::net::TcpListener::bind(addr).await { Err(e) => { log warning; return; } }` — app keeps running without OTEL server
+
+---
+
+## 2026-03-01 - US-013
+- Implemented NormalizedEvent enum with 9 variants (SessionStarted, SessionEnded, ToolStarted, ToolCompleted, StatusChanged, TokensUsed, PermissionRequested, TaskCompleted, Error) and EventSource enum (Otel, Hook, Notify, Poll) in models.rs
+- Created event_bus.rs with EventBus struct wrapping tokio::sync::broadcast channel (capacity 256), with publish() and subscribe() methods
+- Added matching TypeScript discriminated union types (NormalizedEvent, EventSource) in src/types.ts
+- Wired event_bus module declaration into lib.rs
+- Files changed: src-tauri/src/models.rs, src-tauri/src/event_bus.rs (new), src-tauri/src/lib.rs, src/types.ts
+- **Learnings for future iterations:**
+  - NormalizedEvent uses `#[serde(tag = "type")]` for JSON discriminator — TypeScript union uses `type` field to discriminate
+  - EventBus uses tokio::sync::broadcast (not mpsc) so multiple subscribers can receive all events; publish() ignores errors when no receivers exist
+  - Rust NormalizedEvent variants use struct-style enum fields (not tuple variants) so serde camelCase rename works on individual fields
+  - cargo check must be run from src-tauri/ directory (no workspace-level Cargo.toml)
+---
+
+## 2026-03-01 - US-014
+- Created OTEL HTTP/protobuf ingestion server on 127.0.0.1:4318 using axum 0.8
+- Added dependencies: opentelemetry-proto 0.28 (gen-tonic-messages, trace), prost 0.13, axum 0.8, tower-http 0.6
+- Implemented POST /v1/traces handler that decodes ExportTraceServiceRequest protobuf, logs spans at debug level, returns ExportTraceServiceResponse
+- Server gracefully handles port-already-in-use (logs warning, skips OTEL server, app continues)
+- Spawned OTEL server as tokio task in lib.rs setup block alongside hook server
+- Files changed: src-tauri/Cargo.toml, src-tauri/src/otel_server.rs (new), src-tauri/src/lib.rs
+- **Learnings for future iterations:**
+  - axum 0.8 handler signature: `async fn handler(headers: HeaderMap, body: Bytes) -> impl IntoResponse` — extractors are positional params
+  - prost::Message::decode takes `impl Buf` which `Bytes` satisfies directly — no conversion needed
+  - ExportTraceServiceResponse::default().encode_to_vec() produces an empty valid protobuf response
+  - opentelemetry-proto `gen-tonic-messages` feature generates only message types (no gRPC transport), but still pulls in `tonic` as transitive dep
+  - Span trace_id is `Vec<u8>` — format as hex with `.iter().map(|b| format!("{:02x}", b)).collect::<String>()`
+---
+
+## 2026-03-01 - US-015
+- Added span-to-NormalizedEvent mapping in otel_server.rs with support for session lifecycle, tool, and token/usage spans
+- OTEL server now takes EventBus parameter and publishes mapped events
+- Created EventBus → Tauri bridge in lib.rs that subscribes to EventBus and emits 'event-bus:normalized-event' Tauri events
+- EventBus initialized in lib.rs setup block and passed to OTEL server and bridge task
+- Files changed: src-tauri/src/otel_server.rs, src-tauri/src/lib.rs
+- **Learnings for future iterations:**
+  - axum 0.8 State extractor: use `State(event_bus): State<EventBus>` as first handler parameter; EventBus must impl Clone (broadcast::Sender is Clone)
+  - OTEL span timestamps are nanoseconds since epoch (u64) — use `chrono::DateTime::from_timestamp(secs, subsec_nanos)` for ISO 8601 conversion
+  - Span status code accessed via `span.status.as_ref().map(|s| s.code())` — returns `OtelStatusCode` enum (Unset, Ok, Error)
+  - Span attribute extraction: `opentelemetry_proto::tonic::common::v1::any_value::Value::IntValue(n)` for integers, `StringValue(s)` for strings
+  - Tool span completion detection: check `span.end_time_unix_nano > 0 && duration > 0` to distinguish started vs completed tool calls
+  - Session ID fallback: use trace_id hex when no session.id/session_id attribute present
+  - SpanKind import needed but unused — may be useful in future for filtering (e.g., CLIENT vs SERVER spans)
+---
+
+## 2026-03-01 - US-016
+- Integrated hook server with EventBus: `hook_server::start()` now takes an `EventBus` parameter
+- Added `map_hook_to_normalized_event()` function mapping hook event types to NormalizedEvent variants:
+  - PreToolUse → ToolStarted, PostToolUse → ToolCompleted
+  - Stop/SubagentStop/SessionEnd → SessionEnded, SessionStart → SessionStarted
+  - UserPromptSubmit → StatusChanged(Operating)
+  - Unknown event types logged at debug level and skipped (returns None)
+- Existing Tauri events (hook:status-update, hook:permission-request, hook:permission-cancelled) remain unchanged for backwards compatibility
+- PermissionRequest events still use the existing direct Tauri event path (not EventBus) since they require blocking approval round-trip
+- Updated lib.rs: EventBus created before hook server spawn, passed as `hook_bus` clone
+- Files changed: src-tauri/src/hook_server.rs, src-tauri/src/lib.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - Hook events all go through the else branch (non-PermissionRequest) — the `session_id` field is always present for Claude Code hooks
+  - `HookStatusPayload` fields (`session_id`, `timestamp`) needed `.clone()` added since they were previously consumed by move; now they're used in both the Tauri emit and the NormalizedEvent mapping
+  - Hook event type strings come from Claude Code directly: "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "SessionEnd", "SessionStart", "UserPromptSubmit", "PermissionRequest"
+  - The `event_bus` clone is cheap (broadcast::Sender is Clone) — safe to clone per connection handler
+  - EventBus must be created before the hook server spawn in lib.rs since the server needs it at startup
+---
+
+## 2026-03-01 - US-017
+- Created `src/hooks/useEventBus.ts` with `useEventBus()` hook and `mergeEventBusStatus()` function
+- Hook listens for `event-bus:normalized-event` Tauri events and maintains a `Map<sessionId, EventBusSessionState>` with status, timestamp, and source
+- Maps NormalizedEvent variants to AgentStatus: toolStarted/toolCompleted/sessionStarted → operating, sessionEnded/taskCompleted → completed, statusChanged → newStatus, error → error
+- Integrated into `useAgentMonitor.ts` with two-layer merge: hook status first (claude-only), then event-bus status (all agent types, highest priority)
+- Both merge functions use the same 30-second TTL for staleness
+- Files changed: src/hooks/useEventBus.ts (new), src/hooks/useAgentMonitor.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - Event-bus status merging applies to ALL agent types (not just claude like hooks), since OTEL and other event sources can emit for any agent
+  - The merge priority chain is: event-bus > hooks > poll — applied sequentially so later layers override earlier ones
+  - `useEventBus` follows the same pattern as `useHookEvents`: `listen()` in useEffect, cleanup via `unlisten.then(fn => fn())`, Map state with functional updater
+  - `mergeEventBusStatus()` is a pure function (no hook state), making it easy to test and compose
+---
+
+## 2026-03-01 - US-018
+- Created `resources/notchai-codex-notify.sh` bash script for Codex notify relay
+- Script sends JSON payload to `/tmp/notchai.sock` with fields: event_type ('task_complete'), session_id (from CODEX_SESSION_ID env var or 'unknown'), cwd, agent ('codex'), source ('codex'), timestamp (ISO 8601)
+- Uses socat as primary transport, python3 one-liner as fallback for Unix socket communication
+- Script is fail-open: `trap 'exit 0' ERR` + `|| true` on socket writes ensure Codex is never blocked
+- Added script to bundle resources in tauri.conf.json alongside notchai-hook.py
+- Made script executable (chmod 755)
+- Files changed: resources/notchai-codex-notify.sh (new), src-tauri/tauri.conf.json
+- **Learnings for future iterations:**
+  - Codex notify script sends to the same `/tmp/notchai.sock` as the Claude hook — the hook_server already handles deserialization via HookMessage struct
+  - The `agent` field in HookMessage is what identifies the source agent type ('claude' vs 'codex') — US-019 will need to handle `agent: "codex"` in hook_server.rs
+  - The `event_type: "task_complete"` is a Codex-specific event type not yet mapped in `map_hook_to_normalized_event()` — US-019 will add this mapping
+  - Bash `date -u +"%Y-%m-%dT%H:%M:%SZ"` produces ISO 8601 UTC timestamp matching the Python hook's format
+  - socat `UNIX-CONNECT:` is fire-and-forget (no response expected) which is appropriate for notify events (unlike Claude PermissionRequest which blocks)
+---
+
+## 2026-03-01 - US-019
+- Added `install_codex_hooks()`, `uninstall_codex_hooks()`, `install_codex_hooks_if_enabled()` to hook_installer.rs
+- Codex installer reads/modifies `~/.codex/config.toml` to set `notify = ["/path/to/notchai-codex-notify.sh"]`
+- Script copied to `~/.notchai/hooks/notchai-codex-notify.sh` (not in .codex dir to keep notchai files together)
+- Installation is idempotent via `CODEX_NOTIFY_MARKER = "notchai-codex-notify.sh"` string check in config content
+- Uninstall replaces notify line with `notify = []` and deletes the copied script
+- Added `codex_hooks_enabled` flag to `~/.notchai/config.json` (default true) with get/set functions
+- Extended `map_hook_to_normalized_event()` with `agent` parameter: dynamically determines AgentType (codex→Codex) and EventSource (codex→Notify)
+- Added `task_complete` event type mapping → `NormalizedEvent::TaskCompleted`
+- Added `resolve_codex_notify_script()` for Tauri resource + dev fallback resolution
+- Added `toggle_codex_hooks_enabled` and `get_codex_hooks_enabled` Tauri commands
+- Updated `SettingsPayload`, `get_settings`, and `save_settings` to include `codex_hooks_enabled`
+- Wired Codex hook installation into lib.rs setup block alongside Claude hooks
+- Registered new commands in invoke_handler
+- Files changed: src-tauri/src/hook_installer.rs, src-tauri/src/hook_server.rs, src-tauri/src/lib.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - Codex CLI config.toml uses `notify = ["command", "arg1"]` array format (not `notify.command` nested table)
+  - String-based TOML editing avoids adding `toml` crate dependency; works well for simple key replacement but won't handle multi-line arrays
+  - The `agent` field in HookMessage is the key discriminator for multi-agent event routing: "codex"→Codex, "gemini"→Gemini, default→Claude
+  - `EventSource::Notify` is used for Codex events (fire-and-forget from notify script) vs `EventSource::Hook` for Claude (bidirectional with permission round-trips)
+  - `save_settings` Tauri command now takes `codex_hooks_enabled` as an additional parameter — frontend callers must be updated (US-020)
+---
+
+## 2026-03-01 - US-020
+- Added Codex hooks toggle to SettingsView alongside existing Claude hooks toggle
+- Added `codexHooksEnabled` state, loaded from `get_settings` on mount
+- Toggle calls `toggle_codex_hooks_enabled` Tauri command (already existed from US-019)
+- Updated labels: "Claude Hooks" and "Codex Hooks" clearly distinguish the two toggles
+- Updated `save_settings` call in sound toggle handler to include `codexHooksEnabled` parameter
+- Files changed: src/components/SettingsView.tsx, tasks/prd.json
+- **Learnings for future iterations:**
+  - The Rust backend (toggle_codex_hooks_enabled, get_codex_hooks_enabled) was already wired up in US-019 — the frontend just needed to consume it
+  - Both hooks toggles share the same `saving` mutex to prevent concurrent toggle operations
+  - `save_settings` requires all settings fields (hooksEnabled, codexHooksEnabled, selectedScreen, soundEnabled) — omitting one will cause a Tauri invoke error
+  - The toggle follows the exact same pattern as Claude hooks toggle: optimistic update after successful invoke, not before
+---
+
+## 2026-03-01 - US-021
+- Reviewed all 9 Claude Code hook event types — already registered in hook_installer.rs (PreToolUse, PostToolUse, PermissionRequest, UserPromptSubmit, Notification, Stop, SubagentStop, SessionStart, SessionEnd)
+- Updated Python hook script to forward `title` and `message` fields for Notification events
+- Added `title` and `message` optional fields to HookMessage, and `NotificationPayload` struct to hook_models.rs
+- hook_server.rs now handles Notification events: triggers macOS notification via `tauri_plugin_notification::NotificationExt` and emits `hook:notification` Tauri event
+- Changed catch-all `_` in `map_hook_to_normalized_event` to publish `StatusChanged(Operating)` instead of returning None — unknown events are never silently dropped
+- Updated `hookEventToStatus` in useHookEvents.ts: added SessionStart, Notification, and default case all mapping to "operating"
+- Added `hook:notification` listener in useHookEvents with 4-second auto-clear `notificationText` state
+- Plumbed `notificationText` through useAgentMonitor → App → CollapsedView
+- CollapsedView shows notification title text (cyan color, max 160px with ellipsis) when present, replacing normal status briefly
+- Added `.collapsed-count--notification` CSS class
+- Files changed: resources/notchai-hook.py, src-tauri/src/hook_models.rs, src-tauri/src/hook_server.rs, src/App.css, src/App.tsx, src/components/CollapsedView.tsx, src/hooks/useAgentMonitor.ts, src/hooks/useHookEvents.ts, src/types/hooks.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - Claude Code Notification events carry `title` and `message` fields in hook_input, not `tool_name`/`tool_input` — the Python hook must explicitly forward them
+  - `tauri-plugin-notification` (already a dependency) provides `NotificationExt` trait on `AppHandle` — `app_handle.notification().builder().title().body().show()` triggers native macOS notification
+  - Unknown hook event types should always map to a NormalizedEvent (StatusChanged Operating) rather than being silently dropped — this ensures the UI stays responsive to new Claude Code events
+  - The `hook:notification` Tauri event is separate from `hook:status-update` — status updates control session status merging while notifications control the brief text flash in collapsed view
+  - `notificationText` auto-clears after 4 seconds via `setTimeout` in useHookEvents — the timer ref is cleaned up on unmount
+---
+
+## 2026-03-01 - US-022
+- Added `APPROVAL_TTL_SECS` constant (300) to hook_server.rs for configurable TTL
+- Added `dedup_map: Arc<Mutex<HashMap<(String, String, String), String>>>` to HookServer — maps (session_id, tool_name, tool_use_id) → request_id
+- When a duplicate PermissionRequest arrives, the old oneshot sender is dropped (cancelled), old request_id removed from pending map, and `hook:permission-cancelled` Tauri event emitted
+- Added `tokio::time::sleep(Duration::from_secs(APPROVAL_TTL_SECS))` as a third branch in the `select!` macro — expired approvals get a deny response and `hook:permission-cancelled` event
+- All three `select!` branches (response, disconnect, TTL) clean up the dedup_map entry on exit
+- Frontend: added `APPROVAL_TTL_MS` (300000) constant and `filterStaleApprovals()` helper to useHookEvents.ts
+- `setPendingApprovals` calls on permission-request and permission-cancelled listeners now filter through `filterStaleApprovals()` as a safety net
+- Files changed: src-tauri/src/hook_server.rs, src/hooks/useHookEvents.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - The dedup key uses tool_use_id from the PreToolUse cache (since PermissionRequest doesn't carry it directly) — defaults to empty string if no cached value
+  - tokio::select! branches must clean up both `pending` and `dedup_map` — forgetting either causes leaks
+  - The TTL branch sends a deny response to the hook script before emitting the cancelled event — the hook script still receives a valid JSON response
+  - Frontend TTL filter runs opportunistically on every state update, not on a timer — this is a safety net, not the primary expiration mechanism
+  - `Duration::from_secs()` requires `use std::time::Duration` import in hook_server.rs
+---
+
+## 2026-03-01 - US-023
+- Added incremental byte-offset reading to Codex adapter using `Mutex<HashMap<String, u64>>` for offsets and `Mutex<HashMap<String, CodexSessionData>>` for cached session data
+- On first read: files <= 50KB read entirely; files > 50KB read header (first ~4KB for session_meta/turn_context) + last 50KB (for recent events)
+- On subsequent reads: seeks to stored byte offset, reads only new lines, merges into cached session data
+- Added mtime-based skip to Gemini adapter: tracks `HashMap<String, SystemTime>` for file modification times, skips re-parsing when mtime unchanged
+- Gemini cached session data stored in `Mutex<HashMap<String, GeminiSessionData>>`, returned directly when mtime matches
+- Both adapters accumulate state incrementally: Codex message_count += new messages, token_count overwrites with latest cumulative total; Gemini re-parses only on file change
+- CodexSessionData changed to `#[derive(Clone, Default)]` with `id: Option<String>` for incremental building
+- GeminiSessionData changed to `#[derive(Clone)]` for cache storage
+- Files changed: src-tauri/src/adapters/codex.rs, src-tauri/src/adapters/gemini.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - `std::sync::Mutex` (not tokio) is required for adapter caches since `get_sessions()` is synchronous (called from poll thread)
+  - `BufReader<&File>` supports both `BufRead` and `Seek` — `seek()` correctly invalidates the BufReader's internal buffer
+  - Codex `total_token_usage` in `token_count` events is cumulative (uses `=` not `+=`) — safe for incremental reads since the latest value is always the correct total
+  - For large JSONL files, reading header (first few lines) + tail (last 50KB) captures both session metadata and recent activity while skipping the middle
+  - Gemini files are JSON (not JSONL) so incremental byte-offset reading doesn't apply — mtime-based skip is the right optimization
+  - Both caches hold two Mutex locks simultaneously (`offsets` + `session_cache` for Codex, `mtime_cache` + `session_cache` for Gemini) — safe since always acquired in same order and held briefly
+---
+
+## 2026-03-01 - US-024
+- Added 32 unit tests across 5 modules: transcript.rs, otel_server.rs, codex.rs, gemini.rs, models.rs
+- Added `PartialEq` derive to `NormalizedEvent` for serde round-trip assertions
+- TranscriptReader tests (3): normal conversation with 2+ messages and token/telemetry accumulation, tool_use + tool_result correlation by tool_use_id, malformed/truncated JSONL line graceful skipping
+- OTEL span mapping tests (8): tool span completed with duration/status, tool span started (no end time), session.start span, session.end span, unknown span returns None, token usage span with llm.input_tokens/output_tokens, agent_type_from_service_name mapping, session_id fallback to trace_id hex, error status code mapping
+- Codex adapter tests (8): session_meta parsing with id/cwd/git_branch, user_message/agent_message/token_count event_msg subtypes, turn_context model extraction, malformed line ignored, incremental message accumulation, task_started/task_complete events, cumulative token count overwrite behavior
+- Gemini adapter tests (6): conversation record parsing with roles/tokens/models, tool_calls extraction from assistant messages, empty messages array, null/missing messages, parse_session counts (message_count, tokens, model, first_prompt), no tool calls case
+- NormalizedEvent serde tests (5): round-trip for SessionStarted, ToolCompleted, TokensUsed, Error variants, plus all-variants comprehensive test
+- Files changed: src-tauri/src/models.rs, src-tauri/src/transcript.rs, src-tauri/src/otel_server.rs, src-tauri/src/adapters/codex.rs, src-tauri/src/adapters/gemini.rs, tasks/prd.json
+- **Learnings for future iterations:**
+  - No `#[cfg(test)]` modules existed prior — this project had zero test infrastructure; tests go in each source file as `#[cfg(test)] mod tests { use super::*; ... }`
+  - OTEL Span protobuf type (from opentelemetry-proto) has `Default` impl — construct with `Span { name: ..., ..Default::default() }` for tests
+  - KeyValue attributes need `AnyValue { value: Some(Value::StringValue(s)) }` nesting — helper functions `kv_string`/`kv_int` make tests much cleaner
+  - `Status.code` field is `i32` (protobuf enum), set via `OtelStatusCode::Ok as i32`; read back via `status.code()` method
+  - Temp file tests should use unique names per test function and clean up with `let _ = std::fs::remove_file()` at end
+  - `CodexAdapter::apply_line()` is a pure static method (no `&self`) — ideal for unit testing without constructing the full adapter
+  - GeminiAdapter `parse_session()` needs the full adapter struct but only uses it for the method call — construct with `ProcessDetector::new()` and empty Mutex maps
+  - All 32 tests run in ~0.00s — no I/O-heavy or async tests, all synchronous with in-memory or tiny temp files
+---
