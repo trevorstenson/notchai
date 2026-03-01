@@ -406,9 +406,38 @@ fn list_screens() -> Vec<ScreenInfo> {
     notch::list_screens()
 }
 
+/// Return a usable selected screen index.
+/// If the saved index no longer exists (e.g. monitor disconnected),
+/// reset it to auto-detect (None) and persist that repair.
+fn get_valid_selected_screen() -> Option<usize> {
+    let selected = hook_installer::get_selected_screen();
+    let Some(idx) = selected else {
+        return None;
+    };
+
+    let is_valid = notch::list_screens().iter().any(|screen| screen.index == idx);
+    if is_valid {
+        Some(idx)
+    } else {
+        if let Err(e) = hook_installer::set_selected_screen(None) {
+            eprintln!(
+                "[settings] failed to reset stale selected_screen index {}: {}",
+                idx, e
+            );
+        }
+        None
+    }
+}
+
+/// Resolve the screen index used for window placement.
+/// Explicit user selection wins; otherwise prefer primary display (index 0).
+fn effective_screen_index_for_placement(selected_screen: Option<usize>) -> Option<usize> {
+    selected_screen.or_else(|| notch::list_screens().first().map(|screen| screen.index))
+}
+
 #[tauri::command]
 fn get_selected_screen() -> Option<usize> {
-    hook_installer::get_selected_screen()
+    get_valid_selected_screen()
 }
 
 #[tauri::command]
@@ -428,7 +457,7 @@ fn get_settings() -> SettingsPayload {
     SettingsPayload {
         hooks_enabled: hook_installer::get_hooks_enabled(),
         codex_hooks_enabled: hook_installer::get_codex_hooks_enabled(),
-        selected_screen: hook_installer::get_selected_screen(),
+        selected_screen: get_valid_selected_screen(),
         sound_enabled: hook_installer::get_sound_enabled(),
     }
 }
@@ -470,7 +499,7 @@ fn save_settings(
     }
 
     // Handle screen selection
-    let current_screen = hook_installer::get_selected_screen();
+    let current_screen = get_valid_selected_screen();
     if selected_screen != current_screen {
         hook_installer::set_selected_screen(selected_screen)?;
         reposition_window(selected_screen, &window, &app, &state);
@@ -489,7 +518,8 @@ fn reposition_window(
     #[allow(unused_variables)] app: &tauri::AppHandle,
     #[allow(unused_variables)] state: &tauri::State<'_, AppState>,
 ) {
-    let detection = notch::detect_notch_on_screen(screen_index);
+    let effective_screen = effective_screen_index_for_placement(screen_index);
+    let detection = notch::detect_notch_on_screen(effective_screen);
     let notch = &detection.info;
     let hover_width = (notch.width + 340.0).max(540.0);
     let hover_height = 420.0;
@@ -1168,8 +1198,9 @@ pub fn run() {
 
             // Detect notch and position an invisible hover zone over it.
             // Respects saved screen selection; auto-detects if none is set.
-            let selected_screen = hook_installer::get_selected_screen();
-            let detection = notch::detect_notch_on_screen(selected_screen);
+            let selected_screen = get_valid_selected_screen();
+            let effective_screen = effective_screen_index_for_placement(selected_screen);
+            let detection = notch::detect_notch_on_screen(effective_screen);
             let notch = detection.info;
             let hover_width = (notch.width + 340.0).max(540.0);
             // Debug-first sizing: keep the window tall so expanded content is never clipped.

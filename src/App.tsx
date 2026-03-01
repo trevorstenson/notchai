@@ -16,9 +16,10 @@ const LEAVE_COLLAPSE_DELAY_MS = 120;
 
 // Debug behavior is enabled during development only.
 const DEBUG_MODE = import.meta.env.DEV;
+const INITIAL_VIEW_STATE: ViewState = DEBUG_MODE ? "expanded" : "collapsed";
 
 function App() {
-  const [viewState, setViewState] = useState<ViewState>("collapsed");
+  const [viewState, setViewState] = useState<ViewState>(INITIAL_VIEW_STATE);
   const animatingRef = useRef(false);
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
