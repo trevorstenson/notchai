@@ -524,6 +524,26 @@ body {
   color: var(--color-text);
 }
 
+.tool-approval-headline {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+
+.tool-approval-detail {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
 .tool-approval-input {
   font-size: 10px;
   font-family: var(--font-mono);
@@ -573,6 +593,190 @@ body {
 }
 
 .tool-approval-btn--deny:hover {
+  background: rgba(255, 68, 68, 0.15);
+  color: #FF4444;
+  border-color: rgba(255, 68, 68, 0.3);
+}
+
+/* === Question Card === */
+.question-card {
+  width: 100%;
+  padding: 0 16px 12px;
+}
+
+.question-card-inner {
+  background: rgba(123, 97, 255, 0.08);
+  border: 1px solid rgba(123, 97, 255, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.question-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.question-card-icon {
+  font-size: 11px;
+  font-weight: 700;
+  color: #7B61FF;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid #7B61FF;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.question-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b8a2ff;
+  flex: 1;
+}
+
+.question-card-badge {
+  font-size: 10px;
+  font-weight: 500;
+  color: #b8a2ff;
+  background: rgba(123, 97, 255, 0.15);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.question-card-question {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+.question-card-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.question-card-options::-webkit-scrollbar {
+  width: 3px;
+}
+
+.question-card-options::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.question-card-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  text-align: left;
+  color: var(--color-text);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.question-card-option:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.question-card-option--selected {
+  background: rgba(123, 97, 255, 0.12);
+  border-color: rgba(123, 97, 255, 0.4);
+}
+
+.question-card-option--selected:hover {
+  background: rgba(123, 97, 255, 0.18);
+}
+
+.question-card-option-indicator {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  margin-top: 1px;
+  color: var(--color-text-secondary);
+}
+
+.question-card-option--selected .question-card-option-indicator {
+  color: #b8a2ff;
+}
+
+.question-card-option-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.question-card-option-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.question-card-option-desc {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  line-height: 1.3;
+}
+
+.question-card-context {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+
+.question-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.question-card-btn {
+  flex: 1;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.question-card-btn:hover {
+  opacity: 0.85;
+}
+
+.question-card-btn--submit {
+  background: #7B61FF;
+  color: #fff;
+}
+
+.question-card-btn--submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.question-card-btn--deny {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.question-card-btn--deny:hover {
   background: rgba(255, 68, 68, 0.15);
   color: #FF4444;
   border-color: rgba(255, 68, 68, 0.3);

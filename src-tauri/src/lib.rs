@@ -212,6 +212,7 @@ async fn respond_to_approval(
     request_id: String,
     decision: String,
     reason: Option<String>,
+    updated_input: Option<String>,
 ) -> Result<(), String> {
     let server = hook_server::get_server().ok_or("Hook server not running")?;
     server
@@ -220,25 +221,38 @@ async fn respond_to_approval(
             PermissionDecision {
                 decision,
                 reason,
+                updated_input,
             },
         )
         .await
 }
 
-#[tauri::command]
-fn toggle_hooks_enabled(enabled: bool) -> Result<(), String> {
-    if enabled {
-        // Resolve source script from the known install destination
-        // (the script is already installed at ~/.claude/hooks/notchai-hook.py,
-        //  but we install from the resources dir — use the bundled copy)
-        let source = dirs::home_dir()
-            .map(|h| h.join(".claude").join("hooks").join("notchai-hook.py"))
-            .ok_or("Cannot determine home directory")?;
-        // If the script already exists, use it as source (reinstall in-place)
-        // Otherwise, this is a fresh enable — try the resources fallback
-        if source.exists() {
-            hook_installer::install_hooks(&source)?;
+/// Resolve the bundled notchai-hook.py, trying Tauri resource paths and a dev-mode fallback.
+fn resolve_hook_script(app: &tauri::AppHandle) -> Option<PathBuf> {
+    // Try Tauri resource resolution (works in production bundles)
+    for name in &["resources/notchai-hook.py", "notchai-hook.py"] {
+        if let Ok(p) = app.path().resolve(*name, tauri::path::BaseDirectory::Resource) {
+            if p.exists() {
+                return Some(p);
+            }
         }
+    }
+    // Dev-mode fallback: file lives at <project-root>/resources/notchai-hook.py
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(|root| root.join("resources").join("notchai-hook.py"))?;
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    None
+}
+
+#[tauri::command]
+fn toggle_hooks_enabled(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled {
+        let resource_path = resolve_hook_script(&app)
+            .ok_or("Cannot find notchai-hook.py in app bundle or project resources")?;
+        hook_installer::install_hooks(&resource_path)?;
     } else {
         hook_installer::uninstall_hooks()?;
     }
@@ -819,7 +833,7 @@ pub fn run() {
         .setup(|app| {
             // Install hooks if enabled and spawn the socket server
             let app_handle = app.handle().clone();
-            if let Some(resource_path) = app.path().resolve("resources/notchai-hook.py", tauri::path::BaseDirectory::Resource).ok() {
+            if let Some(resource_path) = resolve_hook_script(app.handle()) {
                 if let Err(e) = hook_installer::install_hooks_if_enabled(&resource_path) {
                     eprintln!("[hooks] install failed: {}", e);
                 }

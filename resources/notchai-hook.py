@@ -33,6 +33,7 @@ def truncate(value, max_len):
 def build_hook_message(hook_input):
     """Build a HookMessage from the Claude Code hook input JSON."""
     event_type = hook_input.get("hook_event_name", "")
+    tool_name = hook_input.get("tool_name", "")
 
     # tool_input may be a dict; serialize it for transport
     tool_input_raw = hook_input.get("tool_input")
@@ -41,7 +42,12 @@ def build_hook_message(hook_input):
             tool_input_str = json.dumps(tool_input_raw)
         else:
             tool_input_str = str(tool_input_raw)
-        tool_input_str = truncate(tool_input_str, MAX_TOOL_INPUT_LEN)
+        # Don't truncate AskUserQuestion — the frontend needs the full input
+        is_ask_question = (
+            event_type == "PermissionRequest" and tool_name == "AskUserQuestion"
+        )
+        if not is_ask_question:
+            tool_input_str = truncate(tool_input_str, MAX_TOOL_INPUT_LEN)
     else:
         tool_input_str = None
 
@@ -128,6 +134,7 @@ def main():
     if is_permission_request and response:
         decision = response.get("decision", "allow")
         reason = response.get("reason")
+        updated_input_str = response.get("updated_input")
 
         if decision == "deny":
             output = {
@@ -140,12 +147,17 @@ def main():
                 }
             }
         else:
+            decision_obj = {"behavior": "allow"}
+            # For AskUserQuestion: include updatedInput with user's answers
+            if updated_input_str:
+                try:
+                    decision_obj["updatedInput"] = json.loads(updated_input_str)
+                except (json.JSONDecodeError, ValueError):
+                    pass
             output = {
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
-                    "decision": {
-                        "behavior": "allow",
-                    },
+                    "decision": decision_obj,
                 }
             }
 

@@ -130,6 +130,7 @@ pub async fn start(app: AppHandle) {
                         .cloned();
                 }
 
+                let is_question = tool_name == "AskUserQuestion";
                 let payload = PermissionRequestPayload {
                     request_id: request_id.clone(),
                     session_id: session_id.clone(),
@@ -138,6 +139,7 @@ pub async fn start(app: AppHandle) {
                     cwd: msg.cwd.clone(),
                     agent: msg.agent.clone(),
                     timestamp,
+                    is_question,
                 };
 
                 let _ = app_handle.emit("hook:permission-request", &payload);
@@ -152,10 +154,13 @@ pub async fn start(app: AppHandle) {
                 // Wait for the response from the UI
                 match rx.await {
                     Ok(decision) => {
-                        let response = serde_json::json!({
+                        let mut response = serde_json::json!({
                             "decision": decision.decision,
                             "reason": decision.reason
                         });
+                        if let Some(ref updated_input) = decision.updated_input {
+                            response["updated_input"] = serde_json::Value::String(updated_input.clone());
+                        }
                         let response_str = response.to_string() + "\n";
                         if let Err(e) = writer.write_all(response_str.as_bytes()).await {
                             eprintln!("[hook_server] write response error: {}", e);

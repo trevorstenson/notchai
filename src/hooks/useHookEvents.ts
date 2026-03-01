@@ -88,11 +88,17 @@ export function useHookEvents() {
   }, []);
 
   const respondToApproval = useCallback(
-    async (requestId: string, decision: string, reason?: string) => {
+    async (
+      requestId: string,
+      decision: string,
+      reason?: string,
+      updatedInput?: string,
+    ) => {
       await invoke("respond_to_approval", {
         requestId,
         decision,
         reason: reason ?? null,
+        updatedInput: updatedInput ?? null,
       });
 
       // Remove from pending list

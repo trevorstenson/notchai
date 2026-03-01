@@ -18,6 +18,8 @@ pub struct HookMessage {
 pub struct PermissionDecision {
     pub decision: String,
     pub reason: Option<String>,
+    /// For AskUserQuestion: JSON string of updatedInput to pass back via the hook.
+    pub updated_input: Option<String>,
 }
 
 /// Payload emitted as a Tauri event for status updates
@@ -43,4 +45,6 @@ pub struct PermissionRequestPayload {
     pub cwd: Option<String>,
     pub agent: Option<String>,
     pub timestamp: String,
+    /// True when this is a PermissionRequest for AskUserQuestion (question card flow).
+    pub is_question: bool,
 }
