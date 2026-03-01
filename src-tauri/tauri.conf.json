@@ -42,7 +42,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../resources/notchai-hook.py"
+      "../resources/notchai-hook.py",
+      "../resources/notchai-codex-notify.sh"
     ],
     "macOS": {
       "infoPlist": "Info.plist"

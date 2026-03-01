@@ -12,7 +12,8 @@
 - `install_hooks(source_script: &Path)` takes the resolved bundle resource path as input
 - Hook server uses `tokio::sync::Mutex` (not `std::sync::Mutex`) for the pending map since it's held across `.await` points
 - `useAgentMonitor` returns `pendingApprovals` and `respondToApproval` from `useHookEvents` — downstream components should use these for tool approval UI
-- Hook status merging only applies to `claude` agent type sessions; other adapters (codex, cursor, gemini) use polled status only
+- Hook status merging only applies to `claude` agent type sessions; event-bus merging applies to ALL agent types
+- Status merge priority in useAgentMonitor: event-bus > hooks > poll (applied sequentially)
 - Gemini CLI sessions are JSON files at `~/.gemini/tmp/<project_hash>/session-*.json` (respects `GEMINI_CLI_HOME` env var)
 - New adapters need changes in 7 places: models.rs (AgentType enum + structs), adapters/<name>.rs (new), adapters/mod.rs, lib.rs (register), types.ts (AgentType), NotchArc.tsx (AGENT_TYPE_ORDER), pricing.ts
 - `hook_server::get_server()` returns `Option<&'static HookServer>` for Tauri command access; `respond()` is `async`
@@ -96,4 +97,34 @@
   - Hook event type strings come from Claude Code directly: "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "SessionEnd", "SessionStart", "UserPromptSubmit", "PermissionRequest"
   - The `event_bus` clone is cheap (broadcast::Sender is Clone) — safe to clone per connection handler
   - EventBus must be created before the hook server spawn in lib.rs since the server needs it at startup
+---
+
+## 2026-03-01 - US-017
+- Created `src/hooks/useEventBus.ts` with `useEventBus()` hook and `mergeEventBusStatus()` function
+- Hook listens for `event-bus:normalized-event` Tauri events and maintains a `Map<sessionId, EventBusSessionState>` with status, timestamp, and source
+- Maps NormalizedEvent variants to AgentStatus: toolStarted/toolCompleted/sessionStarted → operating, sessionEnded/taskCompleted → completed, statusChanged → newStatus, error → error
+- Integrated into `useAgentMonitor.ts` with two-layer merge: hook status first (claude-only), then event-bus status (all agent types, highest priority)
+- Both merge functions use the same 30-second TTL for staleness
+- Files changed: src/hooks/useEventBus.ts (new), src/hooks/useAgentMonitor.ts, tasks/prd.json
+- **Learnings for future iterations:**
+  - Event-bus status merging applies to ALL agent types (not just claude like hooks), since OTEL and other event sources can emit for any agent
+  - The merge priority chain is: event-bus > hooks > poll — applied sequentially so later layers override earlier ones
+  - `useEventBus` follows the same pattern as `useHookEvents`: `listen()` in useEffect, cleanup via `unlisten.then(fn => fn())`, Map state with functional updater
+  - `mergeEventBusStatus()` is a pure function (no hook state), making it easy to test and compose
+---
+
+## 2026-03-01 - US-018
+- Created `resources/notchai-codex-notify.sh` bash script for Codex notify relay
+- Script sends JSON payload to `/tmp/notchai.sock` with fields: event_type ('task_complete'), session_id (from CODEX_SESSION_ID env var or 'unknown'), cwd, agent ('codex'), source ('codex'), timestamp (ISO 8601)
+- Uses socat as primary transport, python3 one-liner as fallback for Unix socket communication
+- Script is fail-open: `trap 'exit 0' ERR` + `|| true` on socket writes ensure Codex is never blocked
+- Added script to bundle resources in tauri.conf.json alongside notchai-hook.py
+- Made script executable (chmod 755)
+- Files changed: resources/notchai-codex-notify.sh (new), src-tauri/tauri.conf.json
+- **Learnings for future iterations:**
+  - Codex notify script sends to the same `/tmp/notchai.sock` as the Claude hook — the hook_server already handles deserialization via HookMessage struct
+  - The `agent` field in HookMessage is what identifies the source agent type ('claude' vs 'codex') — US-019 will need to handle `agent: "codex"` in hook_server.rs
+  - The `event_type: "task_complete"` is a Codex-specific event type not yet mapped in `map_hook_to_normalized_event()` — US-019 will add this mapping
+  - Bash `date -u +"%Y-%m-%dT%H:%M:%SZ"` produces ISO 8601 UTC timestamp matching the Python hook's format
+  - socat `UNIX-CONNECT:` is fire-and-forget (no response expected) which is appropriate for notify events (unlike Claude PermissionRequest which blocks)
 ---
