@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""
+Notchai hook script for Claude Code.
+
+Bridges Claude Code hook events to the Notchai app via Unix domain socket.
+For PermissionRequest events, blocks waiting for the user's approval decision.
+
+Uses only Python stdlib. Fails open on any error (exits 0 silently)
+so Claude Code is never blocked if the app isn't running.
+"""
+
+import json
+import os
+import socket
+import sys
+import time
+
+SOCKET_PATH = "/tmp/notchai.sock"
+MAX_TOOL_INPUT_LEN = 500
+PERMISSION_TIMEOUT = 300  # seconds
+
+
+def truncate(value, max_len):
+    """Truncate a string value to max_len characters."""
+    if value is None:
+        return None
+    s = str(value)
+    if len(s) <= max_len:
+        return s
+    return s[:max_len - 3] + "..."
+
+
+def build_hook_message(hook_input):
+    """Build a HookMessage from the Claude Code hook input JSON."""
+    event_type = hook_input.get("hook_event_name", "")
+
+    # tool_input may be a dict; serialize it for transport
+    tool_input_raw = hook_input.get("tool_input")
+    if tool_input_raw is not None:
+        if isinstance(tool_input_raw, dict):
+            tool_input_str = json.dumps(tool_input_raw)
+        else:
+            tool_input_str = str(tool_input_raw)
+        tool_input_str = truncate(tool_input_str, MAX_TOOL_INPUT_LEN)
+    else:
+        tool_input_str = None
+
+    return {
+        "event_type": event_type,
+        "session_id": hook_input.get("session_id"),
+        "cwd": hook_input.get("cwd"),
+        "tool_name": hook_input.get("tool_name"),
+        "tool_input": tool_input_str,
+        "tool_use_id": hook_input.get("tool_use_id"),
+        "agent": "claude",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def send_to_socket(message, wait_for_response=False):
+    """Send a JSON message to the Notchai Unix socket.
+
+    If wait_for_response is True, blocks until a response is received
+    or the timeout is reached.
+
+    Returns the parsed response dict, or None.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(SOCKET_PATH)
+    except (socket.error, OSError):
+        # App not running or socket unavailable - fail open
+        sock.close()
+        return None
+
+    try:
+        payload = json.dumps(message) + "\n"
+        sock.sendall(payload.encode("utf-8"))
+
+        if not wait_for_response:
+            return None
+
+        # Wait for the permission decision
+        sock.settimeout(PERMISSION_TIMEOUT)
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            # Response is a single JSON object terminated by newline
+            if b"\n" in buf:
+                break
+
+        if buf:
+            return json.loads(buf.decode("utf-8").strip())
+        return None
+    except (socket.timeout, socket.error, OSError):
+        # Timeout or error - fail open
+        return None
+    except (json.JSONDecodeError, ValueError):
+        # Malformed response - fail open
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def main():
+    # Read hook input from stdin
+    try:
+        raw = sys.stdin.read()
+        if not raw.strip():
+            sys.exit(0)
+        hook_input = json.loads(raw)
+    except (json.JSONDecodeError, ValueError, IOError):
+        # Can't parse input - fail open
+        sys.exit(0)
+
+    event_type = hook_input.get("hook_event_name", "")
+    message = build_hook_message(hook_input)
+    is_permission_request = event_type == "PermissionRequest"
+
+    response = send_to_socket(message, wait_for_response=is_permission_request)
+
+    if is_permission_request and response:
+        decision = response.get("decision", "allow")
+        reason = response.get("reason")
+
+        if decision == "deny":
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "deny",
+                        "message": reason or "Denied by user in Notchai",
+                    },
+                }
+            }
+        else:
+            output = {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "decision": {
+                        "behavior": "allow",
+                    },
+                }
+            }
+
+        sys.stdout.write(json.dumps(output))
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    # Always exit 0 - fail open
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
