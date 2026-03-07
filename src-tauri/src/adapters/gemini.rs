@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -9,7 +8,7 @@ use crate::adapter::AgentAdapter;
 use crate::models::{
     AgentSession, AgentStatus, AgentType, GeminiConversationRecord, ToolCallInfo,
 };
-use crate::process::ProcessDetector;
+use crate::process::{self, ProcessSnapshot};
 use crate::util::detect_git_branch;
 
 #[derive(Clone)]
@@ -24,7 +23,6 @@ struct GeminiSessionData {
 }
 
 pub struct GeminiAdapter {
-    process_detector: ProcessDetector,
     mtime_cache: Mutex<HashMap<String, SystemTime>>,
     session_cache: Mutex<HashMap<String, GeminiSessionData>>,
 }
@@ -32,7 +30,6 @@ pub struct GeminiAdapter {
 impl GeminiAdapter {
     pub fn new() -> Self {
         Self {
-            process_detector: ProcessDetector::new(),
             mtime_cache: Mutex::new(HashMap::new()),
             session_cache: Mutex::new(HashMap::new()),
         }
@@ -45,23 +42,6 @@ impl GeminiAdapter {
         dirs::home_dir()
             .unwrap_or_default()
             .join(".gemini")
-    }
-
-    fn is_gemini_running(&self) -> bool {
-        let output = match Command::new("ps").args(["-eo", "pid,args"]).output() {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().any(|line| {
-            let line = line.trim();
-            (line.contains("gemini-cli")
-                || line.contains("/gemini ")
-                || line.ends_with("/gemini")
-                || line.ends_with(" gemini"))
-                && !line.contains("grep")
-                && !line.contains("notchai")
-        })
     }
 
     fn scan_session_files(&self) -> Vec<(PathBuf, String)> {
@@ -431,7 +411,6 @@ mod tests {
         std::fs::write(&path, json).unwrap();
 
         let adapter = GeminiAdapter {
-            process_detector: ProcessDetector::new(),
             mtime_cache: Mutex::new(HashMap::new()),
             session_cache: Mutex::new(HashMap::new()),
         };
@@ -483,16 +462,23 @@ impl AgentAdapter for GeminiAdapter {
         }
     }
 
-    fn get_sessions(&self) -> Vec<AgentSession> {
+    fn get_sessions(&self, snapshot: &ProcessSnapshot) -> Vec<AgentSession> {
         let files = self.scan_session_files();
-        let is_gemini_running = self.is_gemini_running();
+        let is_gemini_running = snapshot.has_process(|line| {
+            (line.contains("gemini-cli")
+                || line.contains("/gemini ")
+                || line.ends_with("/gemini")
+                || line.ends_with(" gemini"))
+                && !line.contains("grep")
+                && !line.contains("notchai")
+        });
         let total_files = files.len();
 
         let mut sessions: Vec<AgentSession> = files
             .iter()
             .filter_map(|(path, project_hash)| {
                 let data = self.parse_session_cached(path, project_hash)?;
-                let file_age = self.process_detector.get_jsonl_age_secs(&path.to_string_lossy());
+                let file_age = process::get_jsonl_age_secs(&path.to_string_lossy());
                 let status = Self::resolve_status(is_gemini_running, file_age);
 
                 let first_prompt = data

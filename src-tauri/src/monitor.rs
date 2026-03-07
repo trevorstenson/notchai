@@ -1,5 +1,6 @@
 use crate::adapter::AgentAdapter;
 use crate::models::{AgentSession, AgentStatus, ToolCallInfo};
+use crate::process::ProcessSnapshot;
 
 pub struct AgentMonitor {
     adapters: Vec<Box<dyn AgentAdapter>>,
@@ -11,10 +12,12 @@ impl AgentMonitor {
     }
 
     pub fn get_sessions(&self) -> Vec<AgentSession> {
+        let snapshot = ProcessSnapshot::capture();
+
         let mut all_sessions: Vec<AgentSession> = self
             .adapters
             .iter()
-            .flat_map(|adapter| adapter.get_sessions())
+            .flat_map(|adapter| adapter.get_sessions(&snapshot))
             .collect();
 
         // Active sessions first, then by modified date

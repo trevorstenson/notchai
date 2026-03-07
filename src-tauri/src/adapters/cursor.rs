@@ -1,12 +1,11 @@
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::adapter::AgentAdapter;
 use crate::models::{AgentSession, AgentStatus, AgentType};
-use crate::process::ProcessDetector;
+use crate::process::{self, ProcessSnapshot};
 use crate::util::detect_git_branch;
 
 // --- Parsed transcript data ---
@@ -22,7 +21,6 @@ struct CursorTranscriptData {
 
 pub struct CursorAdapter {
     projects_dir: PathBuf,
-    process_detector: ProcessDetector,
 }
 
 impl CursorAdapter {
@@ -30,16 +28,7 @@ impl CursorAdapter {
         let home = dirs::home_dir().unwrap_or_default();
         Self {
             projects_dir: home.join(".cursor").join("projects"),
-            process_detector: ProcessDetector::new(),
         }
-    }
-
-    fn is_cursor_running(&self) -> bool {
-        Command::new("pgrep")
-            .args(["-x", "Cursor"])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
     }
 
     /// Decode a Cursor project slug like "Users-trevorstenson-Development-notchai"
@@ -284,9 +273,11 @@ impl AgentAdapter for CursorAdapter {
         "Cursor"
     }
 
-    fn get_sessions(&self) -> Vec<AgentSession> {
+    fn get_sessions(&self, snapshot: &ProcessSnapshot) -> Vec<AgentSession> {
         let projects = self.scan_transcripts();
-        let is_cursor_running = self.is_cursor_running();
+        let is_cursor_running = snapshot.has_process(|line| {
+            line.contains("Cursor.app") || line.ends_with("/Cursor")
+        });
         let mut total_transcripts = 0;
 
         let mut sessions: Vec<AgentSession> = projects
@@ -297,7 +288,7 @@ impl AgentAdapter for CursorAdapter {
                 transcript_files.iter().filter_map(|path| {
                     let data = Self::parse_transcript(path)?;
                     let file_age =
-                        self.process_detector.get_jsonl_age_secs(&path.to_string_lossy());
+                        process::get_jsonl_age_secs(&path.to_string_lossy());
                     let status = Self::resolve_status(
                         is_cursor_running,
                         file_age,

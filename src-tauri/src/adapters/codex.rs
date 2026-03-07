@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -10,7 +9,7 @@ use serde::Deserialize;
 
 use crate::adapter::AgentAdapter;
 use crate::models::{AgentSession, AgentStatus, AgentType};
-use crate::process::ProcessDetector;
+use crate::process::{self, ProcessSnapshot};
 use crate::util::detect_git_branch;
 
 // --- Constants ---
@@ -93,7 +92,6 @@ struct CodexSessionData {
 pub struct CodexAdapter {
     sessions_dir: PathBuf,
     history_path: PathBuf,
-    process_detector: ProcessDetector,
     offsets: Mutex<HashMap<String, u64>>,
     session_cache: Mutex<HashMap<String, CodexSessionData>>,
 }
@@ -104,24 +102,9 @@ impl CodexAdapter {
         Self {
             sessions_dir: home.join(".codex").join("sessions"),
             history_path: home.join(".codex").join("history.jsonl"),
-            process_detector: ProcessDetector::new(),
             offsets: Mutex::new(HashMap::new()),
             session_cache: Mutex::new(HashMap::new()),
         }
-    }
-
-    fn is_codex_running(&self) -> bool {
-        let output = match Command::new("ps").args(["-eo", "pid,args"]).output() {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().any(|line| {
-            let line = line.trim();
-            (line.contains("/codex") || line.ends_with(" codex") || line.ends_with("/codex"))
-                && !line.contains("grep")
-                && !line.contains("notchai")
-        })
     }
 
     fn scan_session_files(&self) -> Vec<PathBuf> {
@@ -560,9 +543,13 @@ impl AgentAdapter for CodexAdapter {
         "Codex CLI"
     }
 
-    fn get_sessions(&self) -> Vec<AgentSession> {
+    fn get_sessions(&self, snapshot: &ProcessSnapshot) -> Vec<AgentSession> {
         let files = self.scan_session_files();
-        let is_codex_running = self.is_codex_running();
+        let is_codex_running = snapshot.has_process(|line| {
+            (line.contains("/codex") || line.ends_with(" codex") || line.ends_with("/codex"))
+                && !line.contains("grep")
+                && !line.contains("notchai")
+        });
         let history = self.load_history();
         let total_files = files.len();
 
@@ -571,7 +558,7 @@ impl AgentAdapter for CodexAdapter {
             .filter_map(|path| {
                 let data = self.parse_session_incremental(path)?;
                 let id = data.id?;
-                let file_age = self.process_detector.get_jsonl_age_secs(&path.to_string_lossy());
+                let file_age = process::get_jsonl_age_secs(&path.to_string_lossy());
                 let status =
                     Self::resolve_status(is_codex_running, file_age, data.last_event_type.as_deref());
 

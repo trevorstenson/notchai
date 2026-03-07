@@ -5,7 +5,7 @@ import { useHookEvents, mergeHookStatus } from "./useHookEvents";
 import { useEventBus, mergeEventBusStatus } from "./useEventBus";
 
 export function useAgentMonitor(
-  pollIntervalMs = 3000,
+  pollIntervalMs = 10000,
   animatingRef?: MutableRefObject<boolean>,
 ) {
   const [sessions, setSessions] = useState<AgentSession[]>([]);
@@ -20,7 +20,7 @@ export function useAgentMonitor(
     notificationText,
   } = useHookEvents();
 
-  const { eventBusStates } = useEventBus();
+  const { eventBusStates, setOnSessionStart: setOnEBSessionStart } = useEventBus();
 
   const fetchSessions = useCallback(async () => {
     // Skip updates during animation to avoid mid-animation re-renders
@@ -43,13 +43,21 @@ export function useAgentMonitor(
     }
   }, []);
 
-  // Register SessionStart callback to trigger immediate poll refresh
+  // Register SessionStart callback to trigger immediate poll refresh (hooks)
   useEffect(() => {
     setOnSessionStart(() => {
       fetchSessions();
     });
     return () => setOnSessionStart(null);
   }, [setOnSessionStart, fetchSessions]);
+
+  // Register SessionStart callback to trigger immediate poll refresh (event bus)
+  useEffect(() => {
+    setOnEBSessionStart(() => {
+      fetchSessions();
+    });
+    return () => setOnEBSessionStart(null);
+  }, [setOnEBSessionStart, fetchSessions]);
 
   useEffect(() => {
     fetchNotchInfo();

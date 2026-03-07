@@ -31,7 +31,6 @@ use serde::Serialize;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
 use crate::hook_models::PermissionDecision;
-use crate::process::ProcessDetector;
 
 #[cfg(target_os = "macos")]
 const GENERIC_TERMINAL_APPS: &[&str] = &[
@@ -659,9 +658,11 @@ fn collect_claude_runtime_pids() -> Vec<u32> {
         }
     }
 
-    // Secondary source: existing scanner catches wrapper invocations with args.
-    let detector = ProcessDetector::new();
-    for pid in detector.get_claude_pids() {
+    // Secondary source: snapshot catches wrapper invocations with args.
+    let snapshot = process::ProcessSnapshot::capture();
+    for pid in snapshot.get_matching_pids(|line| {
+        (line.contains("/claude") || line.contains("claude ")) && !line.contains("grep")
+    }) {
         pids.insert(pid);
     }
 
@@ -1088,11 +1089,21 @@ fn start_global_hover_monitor_with_flag(
                     && mouse_y_from_top <= active_height;
 
                 if inside != was_inside {
-                    let _ = if inside {
-                        app.emit("open-panel", ())
+                    if inside {
+                        // Activate the app so macOS delivers events to our
+                        // webview immediately, even when another app has focus.
+                        unsafe {
+                            use objc::runtime::{Object, YES};
+                            use objc::{class, msg_send, sel, sel_impl};
+                            let ns_app: *mut Object =
+                                msg_send![class!(NSApplication), sharedApplication];
+                            let _: () =
+                                msg_send![ns_app, activateIgnoringOtherApps: YES];
+                        }
+                        let _ = app.emit("open-panel", ());
                     } else {
-                        app.emit("close-panel", ())
-                    };
+                        let _ = app.emit("close-panel", ());
+                    }
                     was_inside = inside;
                 }
             }
@@ -1341,6 +1352,13 @@ pub fn run() {
             {
                 use objc::runtime::{Object, NO, YES};
                 use objc::{class, msg_send, sel, sel_impl};
+
+                // Accessory policy: no menu bar or dock icon, even when activated
+                unsafe {
+                    let ns_app: *mut Object =
+                        msg_send![class!(NSApplication), sharedApplication];
+                    let _: () = msg_send![ns_app, setActivationPolicy: 1i64];
+                }
 
                 if let Ok(ns_win) = window.ns_window() {
                     let ns_win = ns_win as *mut Object;

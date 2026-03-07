@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { AgentStatus, EventSource, NormalizedEvent } from "../types";
 
@@ -34,6 +34,10 @@ export function useEventBus() {
     Map<string, EventBusSessionState>
   >(() => new Map());
 
+  const onSessionStartRef = useRef<(() => void) | null>(null);
+  const bufferRef = useRef<Map<string, EventBusSessionState>>(new Map());
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const unlisten = listen<NormalizedEvent>(
       "event-bus:normalized-event",
@@ -42,24 +46,49 @@ export function useEventBus() {
         const status = eventToStatus(normalized);
         if (!status) return;
 
-        setEventBusStates((prev) => {
-          const next = new Map(prev);
-          next.set(normalized.sessionId, {
-            status,
-            timestamp: new Date(normalized.timestamp).getTime(),
-            source: normalized.source,
-          });
-          return next;
-        });
+        const entry: EventBusSessionState = {
+          status,
+          timestamp: new Date(normalized.timestamp).getTime(),
+          source: normalized.source,
+        };
+
+        // sessionStarted triggers immediate callback (not debounced)
+        if (normalized.type === "sessionStarted" && onSessionStartRef.current) {
+          onSessionStartRef.current();
+        }
+
+        // Buffer the state update and flush after 150ms
+        bufferRef.current.set(normalized.sessionId, entry);
+        if (!timerRef.current) {
+          timerRef.current = setTimeout(() => {
+            const buffered = bufferRef.current;
+            if (buffered.size > 0) {
+              setEventBusStates((prev) => {
+                const next = new Map(prev);
+                for (const [k, v] of buffered) next.set(k, v);
+                return next;
+              });
+              buffered.clear();
+            }
+            timerRef.current = null;
+          }, 150);
+        }
       },
     );
 
     return () => {
       unlisten.then((fn) => fn());
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
     };
   }, []);
 
-  return { eventBusStates };
+  const setOnSessionStart = useCallback((cb: (() => void) | null) => {
+    onSessionStartRef.current = cb;
+  }, []);
+
+  return { eventBusStates, setOnSessionStart };
 }
 
 /**

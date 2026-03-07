@@ -9,7 +9,7 @@ use crate::models::{
     AgentSession, AgentStatus, AgentType, SessionIndexEntry, ToolCallInfo,
     TranscriptContentBlock, TranscriptEntry,
 };
-use crate::process::ProcessDetector;
+use crate::process::{self, ProcessSnapshot};
 use crate::scanner::SessionIndexScanner;
 use crate::transcript::TranscriptReader;
 use crate::util::detect_git_branch;
@@ -17,7 +17,6 @@ use crate::util::detect_git_branch;
 pub struct ClaudeAdapter {
     scanner: SessionIndexScanner,
     transcript_reader: Mutex<TranscriptReader>,
-    process_detector: ProcessDetector,
 }
 
 impl ClaudeAdapter {
@@ -25,7 +24,6 @@ impl ClaudeAdapter {
         Self {
             scanner: SessionIndexScanner::new(),
             transcript_reader: Mutex::new(TranscriptReader::new()),
-            process_detector: ProcessDetector::new(),
         }
     }
 
@@ -312,21 +310,22 @@ impl AgentAdapter for ClaudeAdapter {
         }
     }
 
-    fn get_sessions(&self) -> Vec<AgentSession> {
+    fn get_sessions(&self, snapshot: &ProcessSnapshot) -> Vec<AgentSession> {
         let entries = self.scanner.scan_all_projects();
-        let has_claude_running = self.process_detector.is_any_claude_running();
+        let has_claude_running = !snapshot.get_matching_pids(|line| {
+            (line.contains("/claude") || line.contains("claude ")) && !line.contains("grep")
+        }).is_empty();
         let total_entries = entries.len();
         let recent_entries = entries.iter().filter(|e| self.is_recent(e)).count();
         let active_file_entries = entries
             .iter()
-            .filter(|e| self.process_detector.is_session_active(&e.full_path))
+            .filter(|e| process::is_session_active(&e.full_path))
             .count();
         let fallback_active_session = if has_claude_running && active_file_entries == 0 {
             entries
                 .iter()
                 .filter_map(|e| {
-                    self.process_detector
-                        .get_jsonl_age_secs(&e.full_path)
+                    process::get_jsonl_age_secs(&e.full_path)
                         .map(|age| (age, e.session_id.clone()))
                 })
                 .min_by_key(|(age, _)| *age)
@@ -347,8 +346,8 @@ impl AgentAdapter for ClaudeAdapter {
                 );
                 let telemetry = reader.get_telemetry(&entry.session_id);
 
-                let jsonl_age = self.process_detector.get_jsonl_age_secs(&entry.full_path);
-                let is_file_active = self.process_detector.is_session_active(&entry.full_path);
+                let jsonl_age = process::get_jsonl_age_secs(&entry.full_path);
+                let is_file_active = process::is_session_active(&entry.full_path);
                 let is_fallback_active = fallback_active_session
                     .as_ref()
                     .map_or(false, |id| id == &entry.session_id);

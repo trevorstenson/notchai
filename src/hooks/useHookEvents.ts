@@ -61,28 +61,45 @@ export function useHookEvents() {
   // Track a callback that the consumer can set for "SessionStart triggers refresh"
   const onSessionStartRef = useRef<(() => void) | null>(null);
 
+  // Debounce buffer for hook status updates
+  const hookBufferRef = useRef<Map<string, HookSessionState>>(new Map());
+  const hookTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     const unlistenStatus = listen<HookStatusEvent>(
       "hook:status-update",
       (event) => {
         const payload = event.payload;
-        setHookStates((prev) => {
-          const next = new Map(prev);
-          next.set(payload.sessionId, {
-            sessionId: payload.sessionId,
-            lastEventType: payload.eventType,
-            lastTimestamp: payload.timestamp,
-            pendingApproval: null,
-          });
-          return next;
-        });
+        const entry: HookSessionState = {
+          sessionId: payload.sessionId,
+          lastEventType: payload.eventType,
+          lastTimestamp: payload.timestamp,
+          pendingApproval: null,
+        };
 
-        // SessionStart triggers an immediate poll refresh
+        // SessionStart triggers an immediate poll refresh (not debounced)
         if (
           payload.eventType === "SessionStart" &&
           onSessionStartRef.current
         ) {
           onSessionStartRef.current();
+        }
+
+        // Buffer the state update and flush after 150ms
+        hookBufferRef.current.set(payload.sessionId, entry);
+        if (!hookTimerRef.current) {
+          hookTimerRef.current = setTimeout(() => {
+            const buffered = hookBufferRef.current;
+            if (buffered.size > 0) {
+              setHookStates((prev) => {
+                const next = new Map(prev);
+                for (const [k, v] of buffered) next.set(k, v);
+                return next;
+              });
+              buffered.clear();
+            }
+            hookTimerRef.current = null;
+          }, 150);
         }
       },
     );
@@ -153,6 +170,9 @@ export function useHookEvents() {
       unlistenNotification.then((fn) => fn());
       if (notificationTimerRef.current) {
         clearTimeout(notificationTimerRef.current);
+      }
+      if (hookTimerRef.current) {
+        clearTimeout(hookTimerRef.current);
       }
     };
   }, []);
