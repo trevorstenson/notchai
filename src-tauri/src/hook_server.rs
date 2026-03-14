@@ -26,6 +26,16 @@ pub fn get_server() -> Option<&'static HookServer> {
     HOOK_SERVER.get()
 }
 
+/// Event types that indicate an agent session has progressed past a pending approval.
+const PROGRESSION_EVENTS: &[&str] = &[
+    "PreToolUse",
+    "PostToolUse",
+    "UserPromptSubmit",
+    "Stop",
+    "SubagentStop",
+    "SessionEnd",
+];
+
 pub struct HookServer {
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionDecision>>>>,
     /// Cache tool_use_id from PreToolUse events keyed by (session_id, tool_name).
@@ -35,6 +45,10 @@ pub struct HookServer {
     /// Dedup map: (session_id, tool_name, tool_use_id) → request_id.
     /// Used to detect and cancel duplicate pending approvals.
     dedup_map: Arc<Mutex<HashMap<(String, String, String), String>>>,
+    /// Reverse lookup: session_id → request_id.
+    /// Used to cancel pending approvals when subsequent events arrive for the same session
+    /// (e.g., user approved in terminal, so PostToolUse fires while approval is still pending).
+    session_pending: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl HookServer {
@@ -43,6 +57,7 @@ impl HookServer {
             pending: Arc::new(Mutex::new(HashMap::new())),
             tool_use_id_cache: Arc::new(Mutex::new(HashMap::new())),
             dedup_map: Arc::new(Mutex::new(HashMap::new())),
+            session_pending: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -70,6 +85,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
     let pending = server.pending.clone();
     let tool_use_id_cache = server.tool_use_id_cache.clone();
     let dedup_map = server.dedup_map.clone();
+    let session_pending = server.session_pending.clone();
     let _ = HOOK_SERVER.set(server);
 
     // Remove stale socket file if it exists
@@ -98,6 +114,7 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
         let pending = pending.clone();
         let cache = tool_use_id_cache.clone();
         let dedup = dedup_map.clone();
+        let sess_pending = session_pending.clone();
         let bus = event_bus.clone();
 
         tokio::spawn(async move {
@@ -186,6 +203,10 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                     let mut pending_lock = pending.lock().await;
                     pending_lock.insert(request_id.clone(), tx);
                 }
+                {
+                    let mut sp_lock = sess_pending.lock().await;
+                    sp_lock.insert(session_id.clone(), request_id.clone());
+                }
 
                 // Race: wait for UI response, detect hook script disconnect, or TTL expiry.
                 let disconnect = async {
@@ -203,10 +224,14 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
 
                 tokio::select! {
                     result = rx => {
-                        // Clean up dedup entry on resolution
+                        // Clean up dedup + session_pending entries on resolution
                         {
                             let mut dedup_lock = dedup.lock().await;
                             dedup_lock.remove(&dedup_key);
+                        }
+                        {
+                            let mut sp_lock = sess_pending.lock().await;
+                            sp_lock.remove(&session_id);
                         }
                         match result {
                             Ok(decision) => {
@@ -226,8 +251,14 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                                 }
                             }
                             Err(_) => {
-                                // Sender was dropped (e.g., dedup replaced it or server shutting down)
-                                eprintln!("[hook_server] permission request {} cancelled", request_id);
+                                // Sender was dropped (e.g., session progressed or dedup replaced it).
+                                // Emit cancelled so frontend clears the modal, and write an allow
+                                // response to unblock the Python hook process.
+                                eprintln!("[hook_server] permission request {} cancelled (sender dropped)", request_id);
+                                let _ = app_handle.emit("hook:permission-cancelled", &request_id);
+                                let allow_response = serde_json::json!({ "decision": "allow" });
+                                let response_str = allow_response.to_string() + "\n";
+                                let _ = writer.write_all(response_str.as_bytes()).await;
                             }
                         }
                     }
@@ -242,6 +273,10 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                             let mut dedup_lock = dedup.lock().await;
                             dedup_lock.remove(&dedup_key);
                         }
+                        {
+                            let mut sp_lock = sess_pending.lock().await;
+                            sp_lock.remove(&session_id);
+                        }
                         let _ = app_handle.emit("hook:permission-cancelled", &request_id);
                     }
                     _ = ttl => {
@@ -255,6 +290,10 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                             let mut dedup_lock = dedup.lock().await;
                             dedup_lock.remove(&dedup_key);
                         }
+                        {
+                            let mut sp_lock = sess_pending.lock().await;
+                            sp_lock.remove(&session_id);
+                        }
                         // Send deny response to the hook script
                         let deny_response = serde_json::json!({
                             "decision": "deny",
@@ -266,6 +305,28 @@ pub async fn start(app: AppHandle, event_bus: EventBus) {
                     }
                 }
             } else {
+                // If this session has a pending approval and the event indicates
+                // the agent has progressed (e.g., user approved in terminal), cancel
+                // the stale approval so the frontend dismisses the modal.
+                if !session_id.is_empty() && PROGRESSION_EVENTS.contains(&msg.event_type.as_str()) {
+                    let stale_request_id = {
+                        let mut sp_lock = sess_pending.lock().await;
+                        sp_lock.remove(&session_id)
+                    };
+                    if let Some(req_id) = stale_request_id {
+                        eprintln!(
+                            "[hook_server] session {} progressed ({}), cancelling pending approval {}",
+                            session_id, msg.event_type, req_id
+                        );
+                        // Drop the sender to trigger the Err branch in the PermissionRequest task
+                        {
+                            let mut pending_lock = pending.lock().await;
+                            pending_lock.remove(&req_id);
+                        }
+                        // Note: dedup_map cleanup happens in the Err branch of the select!
+                    }
+                }
+
                 // Cache tool_use_id from PreToolUse events
                 if msg.event_type == "PreToolUse" {
                     if let Some(ref tool_use_id) = msg.tool_use_id {

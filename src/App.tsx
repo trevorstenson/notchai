@@ -1,12 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useAgentMonitor } from "./hooks/useAgentMonitor";
 import { useSessionNotifications } from "./hooks/useSessionNotifications";
-import { CollapsedView } from "./components/CollapsedView";
 import { ExpandedView } from "./components/ExpandedView";
 import { SettingsView } from "./components/SettingsView";
 import { ToolApproval } from "./components/ToolApproval";
-import { NotchArc } from "./components/NotchArc";
+import { BadgeBar } from "./components/BadgeBar";
 import { calculateSessionCost } from "./lib/pricing";
 import "./App.css";
 
@@ -16,7 +16,7 @@ const LEAVE_COLLAPSE_DELAY_MS = 120;
 
 // Debug behavior is enabled during development only.
 const DEBUG_MODE = import.meta.env.DEV;
-const INITIAL_VIEW_STATE: ViewState = DEBUG_MODE ? "expanded" : "collapsed";
+const INITIAL_VIEW_STATE: ViewState = "collapsed";
 
 function App() {
   const [viewState, setViewState] = useState<ViewState>(INITIAL_VIEW_STATE);
@@ -24,11 +24,24 @@ function App() {
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const { sessions, activeSessions, operatingCount, notchInfo, pendingApprovals, respondToApproval, notificationText } =
+  const { sessions, notchInfo, pendingApprovals, respondToApproval } =
     useAgentMonitor(3000, animatingRef);
   useSessionNotifications(sessions);
 
   const hasPendingApprovals = pendingApprovals.length > 0;
+
+  const [autoExpandOnApproval, setAutoExpandOnApproval] = useState(true);
+
+  // Load auto-expand setting on mount
+  useEffect(() => {
+    invoke<{
+      autoExpandOnApproval: boolean;
+    }>("get_settings")
+      .then((settings) => {
+        setAutoExpandOnApproval(settings.autoExpandOnApproval);
+      })
+      .catch(console.error);
+  }, []);
 
   const totalCost = useMemo(() => {
     const todayStart = new Date();
@@ -109,21 +122,27 @@ function App() {
   const handleIslandMouseLeave = useCallback(() => {
     clearLeaveTimer();
     debugLog("[notchai-ui] mouseleave", { viewState });
-    // Don't auto-collapse while there are pending approvals or settings is open
-    if (hasPendingApprovals || viewState === "settings") return;
+    if (viewState === "settings") return;
     leaveTimerRef.current = setTimeout(() => {
       collapsePanel();
       leaveTimerRef.current = null;
     }, LEAVE_COLLAPSE_DELAY_MS);
-  }, [clearLeaveTimer, collapsePanel, debugLog, viewState, hasPendingApprovals]);
+  }, [clearLeaveTimer, collapsePanel, debugLog, viewState]);
 
-  // Auto-expand when pending approvals arrive, prevent collapse via close-panel
+  // Auto-expand when pending approvals arrive (if setting enabled)
   useEffect(() => {
-    if (hasPendingApprovals) {
+    if (hasPendingApprovals && autoExpandOnApproval) {
       clearLeaveTimer();
       expandPanel();
     }
-  }, [hasPendingApprovals, clearLeaveTimer, expandPanel]);
+  }, [hasPendingApprovals, autoExpandOnApproval, clearLeaveTimer, expandPanel]);
+
+  useEffect(() => {
+    const passthrough = viewState === "collapsed" || viewState === "hidden";
+    invoke("set_window_mouse_passthrough", { enabled: passthrough }).catch((err) => {
+      console.error("[notchai-ui] set_window_mouse_passthrough failed", err);
+    });
+  }, [viewState]);
 
   useEffect(() => {
     const unlistenOpen = listen("open-panel", () => {
@@ -131,8 +150,6 @@ function App() {
       expandPanel();
     });
     const unlistenClose = listen("close-panel", () => {
-      // Don't collapse while there are pending approvals or settings is open
-      if (hasPendingApprovals) return;
       if (viewState === "settings") return;
       clearLeaveTimer();
       collapsePanel();
@@ -142,7 +159,7 @@ function App() {
       unlistenOpen.then((fn) => fn());
       unlistenClose.then((fn) => fn());
     };
-  }, [clearLeaveTimer, collapsePanel, expandPanel, hasPendingApprovals, viewState]);
+  }, [clearLeaveTimer, collapsePanel, expandPanel, viewState]);
 
   const handleSessionOpened = useCallback(() => {
     clearLeaveTimer();
@@ -180,11 +197,12 @@ function App() {
       className={`notch-root notch-root--${viewState === "settings" ? "expanded" : viewState}`}
       onClick={contextMenu ? handleContextMenuClose : undefined}
     >
-      {notchInfo && activeSessions.length > 0 && (
-        <NotchArc
-          sessions={activeSessions}
+      {notchInfo && (
+        <BadgeBar
+          sessions={sessions}
           notchInfo={notchInfo}
           viewState={viewState === "settings" ? "expanded" : viewState}
+          totalCost={totalCost}
         />
       )}
       <div className="island-wrapper">
@@ -196,15 +214,6 @@ function App() {
         >
           {viewState !== "hidden" && (
             <>
-              {viewState !== "settings" && (
-                <CollapsedView
-                  sessions={sessions}
-                  operatingCount={operatingCount}
-                  totalCost={totalCost}
-                  pendingApprovalCount={pendingApprovals.length}
-                  notificationText={notificationText}
-                />
-              )}
               {hasPendingApprovals && viewState !== "settings" && (
                 <ToolApproval
                   pendingApprovals={pendingApprovals}
@@ -212,7 +221,11 @@ function App() {
                 />
               )}
               {viewState === "settings" ? (
-                <SettingsView onBack={closeSettings} />
+                <SettingsView
+                  onBack={closeSettings}
+                  autoExpandOnApproval={autoExpandOnApproval}
+                  onToggleAutoExpand={() => setAutoExpandOnApproval((v) => !v)}
+                />
               ) : (
                 <ExpandedView
                   sessions={sessions}

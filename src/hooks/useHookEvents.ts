@@ -85,6 +85,29 @@ export function useHookEvents() {
           onSessionStartRef.current();
         }
 
+        // If session has progressed past approval state, clear stale approvals
+        if (
+          ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStop", "SessionEnd"].includes(
+            payload.eventType,
+          )
+        ) {
+          setPendingApprovals((prev) => {
+            const filtered = prev.filter((p) => p.sessionId !== payload.sessionId);
+            return filtered.length === prev.length ? prev : filterStaleApprovals(filtered);
+          });
+          setHookStates((prev) => {
+            let changed = false;
+            const next = new Map(prev);
+            for (const [sid, state] of next) {
+              if (state.pendingApproval && state.pendingApproval.sessionId === payload.sessionId) {
+                next.set(sid, { ...state, pendingApproval: null });
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }
+
         // Buffer the state update and flush after 150ms
         hookBufferRef.current.set(payload.sessionId, entry);
         if (!hookTimerRef.current) {

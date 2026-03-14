@@ -434,6 +434,55 @@ pub fn set_selected_screen(index: Option<usize>, name: Option<&str>) -> Result<(
     Ok(())
 }
 
+/// Read the auto_expand_on_approval flag from ~/.notchai/config.json. Defaults to true.
+pub fn get_auto_expand_on_approval() -> bool {
+    let Some(config_path) = notchai_config_path() else {
+        return true;
+    };
+    if !config_path.exists() {
+        return true;
+    }
+    let Ok(content) = fs::read_to_string(&config_path) else {
+        return true;
+    };
+    let Ok(config) = serde_json::from_str::<Value>(&content) else {
+        return true;
+    };
+    config
+        .get("auto_expand_on_approval")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
+}
+
+/// Set the auto_expand_on_approval flag in ~/.notchai/config.json.
+pub fn set_auto_expand_on_approval(enabled: bool) -> Result<(), String> {
+    let config_path = notchai_config_path().ok_or("Cannot determine home directory")?;
+
+    let mut config: Value = if config_path.exists() {
+        let content = fs::read_to_string(&config_path)
+            .map_err(|e| format!("Failed to read config: {}", e))?;
+        serde_json::from_str(&content).unwrap_or(json!({}))
+    } else {
+        json!({})
+    };
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
+
+    if let Some(obj) = config.as_object_mut() {
+        obj.insert("auto_expand_on_approval".to_string(), json!(enabled));
+    }
+
+    let output = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    fs::write(&config_path, output)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+
+    Ok(())
+}
+
 // === Codex notify hooks ===
 
 /// Marker used to identify our entry in Codex config.toml notify.

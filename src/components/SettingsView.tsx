@@ -5,9 +5,11 @@ import type { ScreenInfo } from "../types";
 
 interface SettingsViewProps {
   onBack: () => void;
+  autoExpandOnApproval: boolean;
+  onToggleAutoExpand: () => void;
 }
 
-export function SettingsView({ onBack }: SettingsViewProps) {
+export function SettingsView({ onBack, autoExpandOnApproval, onToggleAutoExpand }: SettingsViewProps) {
   const [screens, setScreens] = useState<ScreenInfo[]>([]);
   const [selectedScreen, setSelectedScreen] = useState<number | null>(null);
   const [hooksEnabled, setHooksEnabled] = useState(true);
@@ -23,6 +25,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       codexHooksEnabled: boolean;
       selectedScreen: number | null;
       soundEnabled: boolean;
+      autoExpandOnApproval: boolean;
     }>("get_settings")
       .then((settings) => {
         setHooksEnabled(settings.hooksEnabled);
@@ -91,6 +94,27 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     }
   };
 
+  const handleAutoExpandToggle = async () => {
+    if (saving) return;
+    const next = !autoExpandOnApproval;
+    onToggleAutoExpand();
+    setSaving(true);
+    try {
+      await invoke("save_settings", {
+        hooksEnabled,
+        codexHooksEnabled,
+        selectedScreen,
+        soundEnabled,
+        autoExpandOnApproval: next,
+      });
+    } catch (err) {
+      console.error("[notchai-ui] save auto-expand setting failed", err);
+      onToggleAutoExpand(); // revert on failure
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSoundToggle = async () => {
     if (saving) return;
     const next = !soundEnabled;
@@ -102,6 +126,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
         codexHooksEnabled,
         selectedScreen,
         soundEnabled: next,
+        autoExpandOnApproval,
       });
       // Play a test sound when enabling
       if (next) {
@@ -195,6 +220,20 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             </span>
             <div
               className={`settings-toggle ${soundEnabled ? "settings-toggle--on" : ""}`}
+            >
+              <div className="settings-toggle-knob" />
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-section">
+          <span className="settings-section-label">Behavior</span>
+          <div className="settings-toggle-row" onClick={handleAutoExpandToggle}>
+            <span className="settings-toggle-label">
+              Auto-expand on approvals
+            </span>
+            <div
+              className={`settings-toggle ${autoExpandOnApproval ? "settings-toggle--on" : ""}`}
             >
               <div className="settings-toggle-knob" />
             </div>

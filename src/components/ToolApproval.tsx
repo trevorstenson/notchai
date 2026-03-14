@@ -121,28 +121,59 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "\u2026";
 }
 
-/** Check if permission_suggestions includes a toolAlwaysAllow option. */
-function hasAlwaysAllowOption(permissionSuggestions: string | null): boolean {
-  if (!permissionSuggestions) return false;
-  try {
-    const suggestions = JSON.parse(permissionSuggestions);
-    return Array.isArray(suggestions) &&
-      suggestions.some((s: { type?: string }) => s.type === "toolAlwaysAllow");
-  } catch {
-    return false;
-  }
+/** A parsed permission suggestion with a label and the permissions payload to send. */
+interface PermissionOption {
+  label: string;
+  updatedPermissions: string;
 }
 
-/** Build an updatedPermissions JSON string from permission_suggestions. */
-function buildAlwaysAllowPermissions(permissionSuggestions: string): string {
+/** Generate a descriptive label from a rule's content and destination. */
+function labelFromRule(
+  rule: { ruleContent?: string; toolName?: string },
+  destination?: string,
+): string {
+  const prefix = destination === "session" ? "Session" : "Always";
+  const rc = rule.ruleContent ?? "";
+  if (rc.startsWith("domain:")) return `${prefix} for ${rc.slice(7)}`;
+  if (rc.startsWith("//")) return `${prefix} for ${rc.replace(/^\/\//, "/")}`;
+  if (rc.length > 20) return `${prefix} for ${rc.slice(0, 17)}…`;
+  if (rc) return `${prefix} for ${rc}`;
+  return prefix;
+}
+
+/** Parse permission_suggestions into renderable button options.
+ *  Supports both legacy `toolAlwaysAllow` and current `addRules` formats. */
+function parsePermissionOptions(permissionSuggestions: string | null): PermissionOption[] {
+  if (!permissionSuggestions) return [];
   try {
     const suggestions = JSON.parse(permissionSuggestions);
-    const rules = suggestions
-      .filter((s: { type?: string }) => s.type === "toolAlwaysAllow")
-      .map((s: { tool?: string }) => ({ pattern: s.tool, allow: true }));
-    return JSON.stringify(rules);
+    if (!Array.isArray(suggestions)) return [];
+
+    const options: PermissionOption[] = [];
+    for (const s of suggestions) {
+      if (s.type === "toolAlwaysAllow") {
+        // Legacy format: { type: "toolAlwaysAllow", tool: "Bash" }
+        options.push({
+          label: `Always Allow`,
+          updatedPermissions: JSON.stringify([{ pattern: s.tool, allow: true }]),
+        });
+      } else if (s.type === "addRules" && Array.isArray(s.rules)) {
+        // Current format: { type: "addRules", rules: [...], behavior, destination }
+        const dest = s.destination as string | undefined;
+        // Use the first rule to generate a descriptive label
+        const firstRule = s.rules[0] as { ruleContent?: string; toolName?: string } | undefined;
+        const label = firstRule
+          ? labelFromRule(firstRule, dest)
+          : dest === "session" ? "Allow Session" : "Always Allow";
+        options.push({
+          label,
+          updatedPermissions: JSON.stringify(s.rules),
+        });
+      }
+    }
+    return options;
   } catch {
-    return "[]";
+    return [];
   }
 }
 
@@ -206,43 +237,64 @@ export function ToolApproval({
           projectContext={projectContext}
         />
 
-        <div className="tool-approval-actions">
-          <button
-            className="tool-approval-btn tool-approval-btn--deny"
-            onClick={() =>
-              respondToApproval(
-                current.requestId,
-                "deny",
-                "Denied by user in Notchai",
-              )
-            }
-          >
-            Deny
-          </button>
-          {hasAlwaysAllowOption(current.permissionSuggestions) && (
-            <button
-              className="tool-approval-btn tool-approval-btn--always"
-              onClick={() =>
-                respondToApproval(
-                  current.requestId,
-                  "allow",
-                  undefined,
-                  undefined,
-                  buildAlwaysAllowPermissions(current.permissionSuggestions!),
-                )
-              }
-            >
-              Always
-            </button>
-          )}
-          <button
-            className="tool-approval-btn tool-approval-btn--allow"
-            onClick={() => respondToApproval(current.requestId, "allow")}
-          >
-            Allow
-          </button>
-        </div>
+        <ApprovalActions
+          requestId={current.requestId}
+          permissionSuggestions={current.permissionSuggestions}
+          respondToApproval={respondToApproval}
+        />
       </div>
+    </div>
+  );
+}
+
+/** Render approval action buttons dynamically based on permission_suggestions. */
+function ApprovalActions({
+  requestId,
+  permissionSuggestions,
+  respondToApproval,
+}: {
+  requestId: string;
+  permissionSuggestions: string | null;
+  respondToApproval: ToolApprovalProps["respondToApproval"];
+}) {
+  const options = useMemo(
+    () => parsePermissionOptions(permissionSuggestions),
+    [permissionSuggestions],
+  );
+
+  return (
+    <div className="tool-approval-actions">
+      <button
+        className="tool-approval-btn tool-approval-btn--deny"
+        onClick={() =>
+          respondToApproval(requestId, "deny", "Denied by user in Notchai")
+        }
+      >
+        Deny
+      </button>
+      {options.map((opt, i) => (
+        <button
+          key={i}
+          className="tool-approval-btn tool-approval-btn--always"
+          onClick={() =>
+            respondToApproval(
+              requestId,
+              "allow",
+              undefined,
+              undefined,
+              opt.updatedPermissions,
+            )
+          }
+        >
+          {opt.label}
+        </button>
+      ))}
+      <button
+        className="tool-approval-btn tool-approval-btn--allow"
+        onClick={() => respondToApproval(requestId, "allow")}
+      >
+        Allow
+      </button>
     </div>
   );
 }

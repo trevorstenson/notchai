@@ -139,6 +139,13 @@ export type NormalizedEvent =
       message: string;
     };
 
+export const AGENT_COLORS: Record<AgentType, string> = {
+  claude: "#E07A40",
+  codex: "#00C853",
+  cursor: "#4A9FFF",
+  gemini: "#A87FFF",
+};
+
 export const STATUS_COLORS: Record<AgentStatus, string> = {
   operating: "#00FF88",
   idle: "#FFB800",
@@ -146,6 +153,15 @@ export const STATUS_COLORS: Record<AgentStatus, string> = {
   waitingForApproval: "#FF8C00",
   error: "#FF4444",
   completed: "#555555",
+};
+
+export const STATUS_PRIORITY: Record<AgentStatus, number> = {
+  waitingForApproval: 6,
+  waitingForInput: 5,
+  error: 4,
+  operating: 3,
+  idle: 2,
+  completed: 1,
 };
 
 export const STATUS_LABELS: Record<AgentStatus, string> = {

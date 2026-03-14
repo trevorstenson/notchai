@@ -56,6 +56,7 @@ struct SettingsPayload {
     codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
+    auto_expand_on_approval: bool,
 }
 
 #[tauri::command]
@@ -66,6 +67,14 @@ fn get_sessions(state: tauri::State<'_, AppState>) -> Vec<AgentSession> {
 #[tauri::command]
 fn get_notch_info() -> NotchInfo {
     notch::detect_notch().info
+}
+
+#[tauri::command]
+fn set_window_mouse_passthrough(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("main window not found")?;
+    set_window_mouse_passthrough_for_window(&window, enabled)
 }
 
 #[tauri::command]
@@ -463,6 +472,7 @@ fn get_settings() -> SettingsPayload {
         codex_hooks_enabled: hook_installer::get_codex_hooks_enabled(),
         selected_screen: get_valid_selected_screen(),
         sound_enabled: hook_installer::get_sound_enabled(),
+        auto_expand_on_approval: hook_installer::get_auto_expand_on_approval(),
     }
 }
 
@@ -472,6 +482,7 @@ fn save_settings(
     codex_hooks_enabled: bool,
     selected_screen: Option<usize>,
     sound_enabled: bool,
+    auto_expand_on_approval: bool,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     // Handle hooks toggle
@@ -515,6 +526,9 @@ fn save_settings(
 
     // Handle sound toggle
     hook_installer::set_sound_enabled(sound_enabled)?;
+
+    // Handle auto-expand on approval toggle
+    hook_installer::set_auto_expand_on_approval(auto_expand_on_approval)?;
 
     Ok(())
 }
@@ -563,6 +577,35 @@ fn reposition_window(
             new_flag,
         );
     }
+}
+
+#[cfg(target_os = "macos")]
+fn set_window_mouse_passthrough_for_window(
+    window: &tauri::WebviewWindow,
+    enabled: bool,
+) -> Result<(), String> {
+    use objc::runtime::{Object, NO, YES};
+    use objc::{msg_send, sel, sel_impl};
+
+    let ns_win = window
+        .ns_window()
+        .map_err(|e| format!("failed to access NSWindow: {}", e))?;
+    let ns_win = ns_win as *mut Object;
+
+    unsafe {
+        let flag = if enabled { YES } else { NO };
+        let _: () = msg_send![ns_win, setIgnoresMouseEvents: flag];
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_window_mouse_passthrough_for_window(
+    _window: &tauri::WebviewWindow,
+    _enabled: bool,
+) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1374,6 +1417,8 @@ pub fn run() {
                         let _: () = msg_send![ns_win, setAcceptsMouseMovedEvents: YES];
                     }
                 }
+
+                set_window_mouse_passthrough_for_window(&window, true).ok();
             }
 
             // Make visible on all workspaces
@@ -1390,6 +1435,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_sessions,
             get_notch_info,
+            set_window_mouse_passthrough,
             open_session_location,
             resume_session,
             respond_to_approval,
