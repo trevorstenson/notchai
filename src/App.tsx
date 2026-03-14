@@ -23,6 +23,7 @@ function App() {
   const animatingRef = useRef(false);
   const animatingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const leaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoExpandedForApprovalRef = useRef(false);
 
   const { sessions, notchInfo, pendingApprovals, respondToApproval } =
     useAgentMonitor(3000, animatingRef);
@@ -96,6 +97,7 @@ function App() {
 
   const openSettings = useCallback(() => {
     debugLog("[notchai-ui] openSettings");
+    autoExpandedForApprovalRef.current = false;
     clearLeaveTimer();
     if (animatingTimerRef.current) {
       clearTimeout(animatingTimerRef.current);
@@ -116,6 +118,7 @@ function App() {
   const handleIslandMouseEnter = useCallback(() => {
     clearLeaveTimer();
     debugLog("[notchai-ui] mouseenter", { viewState });
+    autoExpandedForApprovalRef.current = false;
     expandPanel();
   }, [clearLeaveTimer, debugLog, expandPanel, viewState]);
 
@@ -132,10 +135,21 @@ function App() {
   // Auto-expand when pending approvals arrive (if setting enabled)
   useEffect(() => {
     if (hasPendingApprovals && autoExpandOnApproval) {
+      if (viewState === "collapsed") {
+        autoExpandedForApprovalRef.current = true;
+      }
       clearLeaveTimer();
       expandPanel();
     }
-  }, [hasPendingApprovals, autoExpandOnApproval, clearLeaveTimer, expandPanel]);
+  }, [hasPendingApprovals, autoExpandOnApproval, clearLeaveTimer, expandPanel, viewState]);
+
+  // Auto-collapse when approvals clear, if we auto-expanded for them
+  useEffect(() => {
+    if (!hasPendingApprovals && autoExpandedForApprovalRef.current) {
+      autoExpandedForApprovalRef.current = false;
+      collapsePanel();
+    }
+  }, [hasPendingApprovals, collapsePanel]);
 
   useEffect(() => {
     const passthrough = viewState === "collapsed" || viewState === "hidden";
@@ -147,6 +161,7 @@ function App() {
   useEffect(() => {
     const unlistenOpen = listen("open-panel", () => {
       clearLeaveTimer();
+      autoExpandedForApprovalRef.current = false;
       expandPanel();
     });
     const unlistenClose = listen("close-panel", () => {
