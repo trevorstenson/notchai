@@ -234,6 +234,10 @@ export function ExpandedView({ sessions, onSessionOpened, onOpenSettings }: Expa
                 </div>
 
                 <div className="session-row-meta">
+                  <span className="session-meta-item session-meta-folder">
+                    folder:{folderLabel}
+                  </span>
+                  <span className="session-meta-sep">•</span>
                   {session.agentType && session.agentType !== "claude" && (
                     <>
                       <span className="session-meta-item session-meta-agent-type">
@@ -242,10 +246,6 @@ export function ExpandedView({ sessions, onSessionOpened, onOpenSettings }: Expa
                       <span className="session-meta-sep">•</span>
                     </>
                   )}
-                  <span className="session-meta-item session-meta-folder">
-                    folder:{folderLabel}
-                  </span>
-                  <span className="session-meta-sep">•</span>
                   <span className="session-meta-item">
                     {session.model ?? "unknown model"}
                   </span>
