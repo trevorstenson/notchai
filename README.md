@@ -6,7 +6,7 @@ Notchai sits in your MacBook's notch area as a compact Dynamic Island. Hover to 
 
 ## Features
 
-- **Real-time session monitoring** — polls running Claude, Codex, and Cursor sessions every second
+- **Real-time session monitoring** — polls running sessions every 3 seconds (hooks and the event bus still trigger immediate refreshes when available)
 - **Collapsed + expanded views** — status dots at the notch, full session list on hover
 - **Cost tracking** — per-session and daily totals based on token usage
 - **Native notifications** — alerts when a session needs input or completes

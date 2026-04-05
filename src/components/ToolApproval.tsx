@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { PermissionRequestEvent } from "../types/hooks";
 import { parseAskUserQuestion } from "../types/hooks";
 import { QuestionCard } from "./QuestionCard";
+import { ShellApprovalCard } from "./ShellApprovalCard";
 
 interface ToolApprovalProps {
   pendingApprovals: PermissionRequestEvent[];
@@ -215,6 +216,24 @@ export function ToolApproval({
     );
   }
 
+  // Shell commands: use the structured ShellApprovalCard
+  if (current.toolName === "Bash" || current.toolName === "Shell") {
+    return (
+      <ShellApprovalCard
+        key={current.requestId}
+        approval={current}
+        remaining={remaining}
+        displayToolName={current.toolName === "Shell" ? "Shell" : "Bash"}
+      >
+        <ApprovalActions
+          requestId={current.requestId}
+          permissionSuggestions={current.permissionSuggestions}
+          respondToApproval={respondToApproval}
+        />
+      </ShellApprovalCard>
+    );
+  }
+
   const icon = TOOL_ICONS[current.toolName] ?? "\u26A1"; // ⚡ default
   const projectContext = current.cwd
     ? current.cwd.split("/").pop() || current.cwd
@@ -265,6 +284,7 @@ function ApprovalActions({
   return (
     <div className="tool-approval-actions">
       <button
+        type="button"
         className="tool-approval-btn tool-approval-btn--deny"
         onClick={() =>
           respondToApproval(requestId, "deny", "Denied by user in Notchai")
@@ -275,6 +295,7 @@ function ApprovalActions({
       {options.map((opt, i) => (
         <button
           key={i}
+          type="button"
           className="tool-approval-btn tool-approval-btn--always"
           onClick={() =>
             respondToApproval(
@@ -290,6 +311,7 @@ function ApprovalActions({
         </button>
       ))}
       <button
+        type="button"
         className="tool-approval-btn tool-approval-btn--allow"
         onClick={() => respondToApproval(requestId, "allow")}
       >

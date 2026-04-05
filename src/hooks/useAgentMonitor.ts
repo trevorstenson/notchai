@@ -5,7 +5,7 @@ import { useHookEvents, mergeHookStatus } from "./useHookEvents";
 import { useEventBus, mergeEventBusStatus } from "./useEventBus";
 
 export function useAgentMonitor(
-  pollIntervalMs = 10000,
+  pollIntervalMs = 3000,
   animatingRef?: MutableRefObject<boolean>,
 ) {
   const [sessions, setSessions] = useState<AgentSession[]>([]);

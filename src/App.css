@@ -34,6 +34,9 @@
 
   /* Spring easing */
   --spring: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Shell approval code blocks (spec: ~6 lines at 11px mono) */
+  --approval-code-max-height: 120px;
 }
 
 html,
@@ -723,6 +726,223 @@ body {
   background: rgba(255, 140, 0, 0.15);
   color: #FF8C00;
   border: 1px solid rgba(255, 140, 0, 0.3);
+}
+
+/* === Shell Approval Card === */
+.shell-card--danger {
+  background: rgba(255, 68, 68, 0.08);
+  border-color: rgba(255, 68, 68, 0.25);
+}
+
+.shell-card--moderate {
+  background: rgba(255, 184, 0, 0.08);
+  border-color: rgba(255, 184, 0, 0.25);
+}
+
+.shell-card--danger .tool-approval-title {
+  color: #FF4444;
+}
+
+.shell-card--moderate .tool-approval-title {
+  color: #FFB800;
+}
+
+.shell-risk-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.shell-intent {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.shell-touched-paths {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.shell-path-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  padding: 2px 6px;
+  line-height: 1.3;
+}
+
+.shell-path-icon {
+  font-size: 10px;
+  line-height: 1;
+}
+
+.shell-unknown-warning {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #ff8c8c;
+  margin: 0;
+  padding: 4px 0 0;
+}
+
+.shell-risk-signal-list {
+  list-style: disc;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  line-height: 1.35;
+}
+
+/* === Command Block === */
+.cmd-block-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+}
+
+.cmd-block-wrap--split .cmd-block-fade {
+  border-radius: 0 0 6px 6px;
+}
+
+.cmd-body-wrap {
+  position: relative;
+}
+
+.cmd-block {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.45;
+  overflow-x: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.cmd-block--one-line {
+  white-space: pre;
+}
+
+.cmd-block--multiline {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.cmd-block code {
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  padding: 0;
+}
+
+.cmd-block--capped {
+  max-height: var(--approval-code-max-height, 120px);
+  overflow: hidden;
+}
+
+.cmd-block--split {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cmd-block-fade {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: linear-gradient(transparent, var(--color-island));
+  border-radius: 0 0 6px 6px;
+  pointer-events: none;
+}
+
+.cmd-expand-toggle {
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: left;
+  transition: color 0.12s ease;
+}
+
+.cmd-expand-toggle:hover {
+  color: var(--color-text-secondary);
+}
+
+.cmd-block-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.cmd-prompt {
+  color: var(--color-text-tertiary);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.cmd-risk-token {
+  color: #FF4444;
+  font-weight: 600;
+}
+
+.cmd-launcher-line {
+  padding: 8px 10px 6px;
+  color: var(--color-text-secondary);
+  white-space: pre;
+}
+
+.cmd-split-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cmd-body {
+  padding: 6px 10px 8px;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.cmd-body code {
+  font-family: inherit;
+  font-size: inherit;
+  background: none;
+  padding: 0;
+}
+
+.cmd-body--capped {
+  max-height: var(--approval-code-max-height, 120px);
+  overflow: hidden;
+}
+
+.cmd-pipeline-stage {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* === Question Card === */
