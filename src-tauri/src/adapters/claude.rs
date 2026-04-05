@@ -111,7 +111,9 @@ impl ClaudeAdapter {
             _ => input.to_string(),
         };
         if s.len() > 200 {
-            format!("{}...", &s[..197])
+            let mut end = 197;
+            while !s.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &s[..end])
         } else {
             s
         }
@@ -123,7 +125,9 @@ impl ClaudeAdapter {
             _ => result.to_string(),
         };
         if s.len() > 200 {
-            format!("{}...", &s[..197])
+            let mut end = 197;
+            while !s.is_char_boundary(end) { end -= 1; }
+            format!("{}...", &s[..end])
         } else {
             s
         }
